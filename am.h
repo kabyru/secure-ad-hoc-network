@@ -322,7 +322,7 @@ unsigned char * tool_base64_decode(char * input, int in_length, int *out_length)
 
 void *KDF1_SHA256(const void *in, size_t inlen, void *out, size_t *outlen);
 
-int openssl_cert_add_ext_req(STACK_OF(X509_REQUEST) *sk, int nid, char *value);
+int openssl_cert_add_ext_req(STACK_OF(X509_EXTENSION) *sk, int nid, char *value);
 
 void neigh_sign_req_send(uint32_t addr);
 

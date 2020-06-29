@@ -2493,7 +2493,7 @@ int openssl_cert_mkcert(EVP_PKEY **pkey, X509_REQ *req,X509 **pc1p, X509 **pc0p,
 }
 
 /* Add extensions to REQ */
-int openssl_cert_add_ext_req(STACK_OF(X509_REQUEST) *sk, int nid, char *value) {
+int openssl_cert_add_ext_req(STACK_OF(X509_EXTENSION) *sk, int nid, char *value) {
 	X509_EXTENSION *ex;
 	ex = X509V3_EXT_conf_nid(NULL, NULL, nid, value);
 	if (!ex)

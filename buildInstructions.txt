@@ -1,0 +1,9 @@
+There are a few adjustments that need to be made when building secure-ad-hoc-network in 2020.
+
+DEPENDENCIES
+openssl
+libssl1.0.0-dev
+
+When building and linking, a TYPE DEPENDENCY error occurs for the openssl_cert_add_ext_req function. This has been fixed in this fork.
+
+In the Makefile, the -lssl -pthread flags are required for gcc, as well as a new one: -lcrypto. This was not included in the original release and has been fixed in this fork.
