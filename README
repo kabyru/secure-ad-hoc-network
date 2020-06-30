@@ -1,3 +1,11 @@
+TO USE:
+
+To run the batman daemon on a regular test node, use the following command:
+batmand --role authenticated -d 4 wlan0
+
+To run the batman daemon on the SP node, use the following command:
+batmand --role sp -d 4 wlan0
+
 ***AN UPDATED VERSION FOR THE SECURE VERSION OF BATMAN WILL BE COMMITED SOON***
 
 Code snippet for dumping memory:
