@@ -12,6 +12,17 @@
  *
  */
 
+/* Usage function for my AM extension */
+* void secure_usage() {
+*	fprintf( stderr, "Secure Usage: batmand [options] -R/--role 'sp/authenticated/restricted' interface [interface interface]\n" );
+*	fprintf( stderr, "       -R / --role 'sp'              start as Service Proxy / Master node\n" );
+*	fprintf( stderr, "       -R / --role 'authenticated'   request to become authenticated with full rights\n" );
+*	fprintf( stderr, "       -R / --role 'restricted'      request to become restricted (end-node only)\n" );
+*	fprintf( stderr, "Please refer to 'Starting the Secure Ad Hoc Network.pdf for more instructions.\n");
+* }
+*
+*/
+
 #include "am.h"
 
 
@@ -107,10 +118,11 @@ time_t last_send_time;
 
 /* Usage function for my AM extension */
 void secure_usage() {
-	fprintf( stderr, "Secure Usage: batman [options] -R/--role 'sp/authenticated/restricted' interface [interface interface]\n" );
+	fprintf( stderr, "Secure Usage: batmand [options] -R/--role 'sp/authenticated/restricted' interface [interface interface]\n" );
 	fprintf( stderr, "       -R / --role 'sp'              start as Service Proxy / Master node\n" );
 	fprintf( stderr, "       -R / --role 'authenticated'   request to become authenticated with full rights\n" );
 	fprintf( stderr, "       -R / --role 'restricted'      request to become restricted (end-node only)\n" );
+	fprintf( stderr, "Please refer to 'Starting the Secure Ad Hoc Network.pdf for more instructions.\n");
 }
 
 /* Function called from batman.c that creates a separate AM main thread */
