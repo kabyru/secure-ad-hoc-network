@@ -1,0 +1,32 @@
+My understanding for how the AM Thread works...
+
+'am.c' is called from 'batman.c,' which acts as the main thread of the program.
+
+'am_thread_init' - declared in 'batman.c' and defined in 'am.c' is called by 'batman.c' as a pthread.
+
+Within 'am_thread_init', the following occurs:
+> sockaddr_in addr coming from 'batman.c' is set to a local variable 'my_addr' (of type sockaddr_in, declared at top of 'am.c')
+> sockaddr_in broad coming from 'batman.c' is set to a local variable 'broadcast_addr' (also of type sockaddr_in)
+> broadcast_addr.sin_family is set to AF_INET, which defines the interface type.
+> broadcast_addr.sin_port is then set to AM_PORT, which is defined in 'am.h' as 64305.
+> The interface is given a name, copies the name within the 'dev' parameter passed from 'batman.c'
+
+> Once these operations complete, the am_main function is called as a new thread with all these new parameters.
+
+Within 'am_main,' the following occurs:
+> Various variables are initiated, including a destination pointer sockaddr_in,
+a sockaddr_storage receiving address, a socklen_t (sock length) for address length,
+a fd_set readfds (don't know what this is for, is it a Boolean?), and a timeval tv (i guess some sort of time variable)
+
+> AM Receive and Send Buffers and respective pointers are created. A payload pointer is also created.
+> A pointer for the 'subject name' is initialized to NULL.
+
+> A variable describing the size of the data, ssize_t dava_rcvd is declared
+> am_type 'am_type_rcvd' is declared, describes the type of data received.
+
+> A char pointer called the 'auth_pkt' (auth packet) is set to NULL.
+
+> EVP_PKEY type pointers *tmp_pub, *pkey are set to NULL. These types seem to come from OpenSSL.
+> EVP_CIPHER_CTX type 'aes_master' is declared. This must come from OpenSSL as well.
+
+> Int type 'key_count' is declared to 0 (initialized) and int type 'rcvd_id' is declared. 
