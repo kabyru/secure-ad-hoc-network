@@ -29,4 +29,9 @@ a fd_set readfds (don't know what this is for, is it a Boolean?), and a timeval 
 > EVP_PKEY type pointers *tmp_pub, *pkey are set to NULL. These types seem to come from OpenSSL.
 > EVP_CIPHER_CTX type 'aes_master' is declared. This must come from OpenSSL as well.
 
-> Int type 'key_count' is declared to 0 (initialized) and int type 'rcvd_id' is declared. 
+> Int type 'key_count' is declared to 0 (initialized) and int type 'rcvd_id' is declared.
+> Two time_t variables are used, test_timer and state_timer, which equal zero.
+
+> All algorithms and errors used by OpenSSL are loaded in, using the OpenSSL_add_all_algorithms() and ERR_load_crypto_strings() functions.
+> Socks are then setup for all AM purposes EXCEPT initial authentication, through the use of the socks_am_setup(&am_recv_socket, &am_send_socket) function. (Function is on Line 1861)
+
