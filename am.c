@@ -380,7 +380,7 @@ void *am_main() {
 					break;
 
 				case AUTH_ISSUE:
-					/* Must be unauthenticated */
+					/* Must be unauthenticated */ //This issues the authentication certification to the unauthenticated node.
 					if(my_role == UNAUTHENTICATED && my_state == WAIT_FOR_PC) {
 
 						if(auth_issue_recv(am_payload_ptr)) {
@@ -635,18 +635,18 @@ void al_add(uint32_t addr, uint16_t id, role_type role, unsigned char *subject_n
 	}
 	printf("Subject Name : %s\n", authenticated_list[num_auth_nodes]->name);
 	printf("Public Key   :\n");
-	PEM_write_PUBKEY(stdout,authenticated_list[num_auth_nodes]->pub_key);
+	PEM_write_PUBKEY(stdout,authenticated_list[num_auth_nodes]->pub_key); //This writes the key to the console. However, the key comes from an input parameter...
 	printf("\n");
 
 	if(id != my_id) {
-		EVP_PKEY_free(key);
+		EVP_PKEY_free(key); //If this is a neighbor's key, free it! If this is the host's key, keep it!
 	}
 
 	num_auth_nodes++;
 
 }
 
-/* Add node to trusted neighbor list */
+/* Add node to trusted neighbor list */ //MAC contains the keystream data.
 void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value) {
 
 	int i;
@@ -668,18 +668,18 @@ void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value) {
 
 			} else {
 
-				printf("New address does not match previously stored address, removing node from list\n");
+				printf("New address does not match previously stored address, removing node from list\n"); //The node IP must match the already stored IP of the same-named node or it will be removed to prevent fraud...
 
 				if (mac_value != NULL)
 					free(mac_value);
 
-				neig_list_remove(i);
+				neig_list_remove(i); //...here.
 			}
 			break;
 		}
 	}
 
-	if(i==num_trusted_neigh) {
+	if(i==num_trusted_neigh) { //If the input trusted neighbor is nowhere to be found in the neighbor list, it is added to the list!
 
 		neigh_list[num_trusted_neigh] = malloc(sizeof(trusted_neigh));
 		neigh_list[num_trusted_neigh]->addr = addr;
@@ -743,7 +743,7 @@ int openssl_cert_create_pc0(EVP_PKEY **pkey, unsigned char **subject_name) {
 	CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_ON);
 	bio_err=BIO_new_fp(stderr, BIO_NOCLOSE);
 
-	openssl_cert_selfsign(&pc0, pkey, subject_name);
+	openssl_cert_selfsign(&pc0, pkey, subject_name); //Self Signs PC0
 
 //	RSA_print_fp(stdout,pkey->pkey.rsa,0);
 //	EC_KEY_print_fp(stdout, pkey->pkey.ec_key, 0);
@@ -766,7 +766,7 @@ int openssl_cert_create_pc0(EVP_PKEY **pkey, unsigned char **subject_name) {
 		fprintf(stderr, "Error while writing the RSA private key to file %s\n", MY_KEY);
 	fclose(fp);
 
-	X509_free(pc0);
+	X509_free(pc0); //Once the certificate is written to a file, PC0 is free'd
 //	EVP_PKEY_free(pkey);
 
 #ifdef CUSTOM_EXT
@@ -781,7 +781,7 @@ int openssl_cert_create_pc0(EVP_PKEY **pkey, unsigned char **subject_name) {
 
 }
 
-/* Create PC REQ for an UNAUTHENTICATED Node */
+/* Create PC REQ for an UNAUTHENTICATED Node */ //Used by NOT SP nodes.
 int openssl_cert_create_req(EVP_PKEY **pkey, unsigned char **subject_name) {
 
 	X509_REQ *req;
@@ -831,7 +831,7 @@ int openssl_cert_create_req(EVP_PKEY **pkey, unsigned char **subject_name) {
 }
 
 
-/* Create PC1 */
+/* Create PC1 */ //PC1s are proxy certificates held by authenticated nodes. They require authentication by the PC0 to do so.
 int openssl_cert_create_pc1(EVP_PKEY **pkey, char *addr, unsigned char **subject_name) {
 
 	char *filename;
@@ -868,7 +868,7 @@ int openssl_cert_create_pc1(EVP_PKEY **pkey, char *addr, unsigned char **subject
 	fclose(fp);
 
 
-	if(openssl_cert_mkcert(pkey, req, &pc1, &pc0, subject_name) == 0) {
+	if(openssl_cert_mkcert(pkey, req, &pc1, &pc0, subject_name) == 0) { //If the received proxy certificates allows the creation of a PC1...
 
 //		X509_print_fp(stdout,pc1);
 //		PEM_write_X509(stdout,pc1);
@@ -1031,7 +1031,7 @@ void auth_request_send(sockaddr_in *sin_dest) {
 
 }
 
-/* Send the issued PC1 */
+/* Send the issued PC1 */ //This issues the newly authenticated PC1. This is sent from authenticator to the newly authenticated node.
 void auth_issue_send(sockaddr_in *sin_dest) {
 
 	printf("Sending/Issuing PC to new node\n");
@@ -1131,7 +1131,7 @@ void neigh_pc_send(sockaddr_in *sin_dest) {
 	free(buf);
 }
 
-/* "Broadcast" Signed RAND Auth Packet to neighbors */
+/* "Broadcast" Signed RAND Auth Packet to neighbors */ //This happens periodically
 char *all_sign_send(EVP_PKEY *pkey, EVP_CIPHER_CTX *master, int *key_count) {
 
 	printf("Broadcast new SIGN message to all neighbors\n");

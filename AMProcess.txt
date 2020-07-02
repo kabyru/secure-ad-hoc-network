@@ -35,3 +35,78 @@ a fd_set readfds (don't know what this is for, is it a Boolean?), and a timeval 
 > All algorithms and errors used by OpenSSL are loaded in, using the OpenSSL_add_all_algorithms() and ERR_load_crypto_strings() functions.
 > Socks are then setup for all AM purposes EXCEPT initial authentication, through the use of the socks_am_setup(&am_recv_socket, &am_send_socket) function. (Function is on Line 1861)
 
+> FD_ZERO is used to clear the set defined by readfds
+> The am_recv_socket is then set to the descriptor readfds, which has just been cleared.
+
+> tv is set with sec and usec attributes to define the time interval for checking the socket. (100000 us)
+
+> The user ID is set by using a addr_char array, which goes into the inet_ntop function.
+> my_id is set to the value of inet_addr(addr_char), modulated by UINT16_MAX
+
+> AN AES MASTER KEY is generated using the openssl_key_master_ctx function. This is set to the aes_master variable.
+
+> The number of trusted neighbors and authorized nodes is set to zero, and the subject_name is set to what was determined earlier.
+
+> The next process depends on if the node was initialized as an SP (Master Node/Node 0) or just authenticated.
+> If specified as the Master Node, the openssl_cert_create_pc0 function is used to create PROXY CERTIFICATE ZERO, which is necessary for any other nodes to be connected to the system.
+> The authentication list of the system is also initialized, where the SP is the only node within it.
+> NOTE: YOU MUST HAVE AN SP NODE BEFORE YOU HAVE OTHER NODES CONNECTED TO THE NETWORK.
+
+> If specified as an 'authenticated' (admissible but not Master) node, the openssl_cert_create_req function is used to generate a Proxy Certificate Request.
+
+> The data_rcvd variable is set to 0, the addr_len is set to the size of the recv_addr, the send and recv buffer pointers are set to point at the head of their respective recv_buf, and the payload and dst ptr is set to NULL.
+
+<<<AM MAIN then enters an infinite while-loop which does not end until batmand is killed.>>>
+
+> Incoming data is checked for on the AM Socket, by first clearing out any data within the readfds variable and then setting whatever incoming data to that variable.
+    > The FD_ISSET function is used to first check is the socket is set, and when true, the am_recv_buffer is set to a size of MAXBUFLEN
+    > The data_rcvd variable (a boolean) is set to 1 if incoming data is received and set to the am_recv_buf.
+
+    > If data_rcvd is set to true, then a process is undergone to determine WHAT type of data was received so that certain operations can take place.
+    > The neighbor node's address of which sent the received data, is stored in a local in_addr variable called 'neigh_addr'
+
+    > A switch statement is used to differentiate between the different types of AM messages that could be possibly received...
+    > the SIGNATURE case, allowed in all sates, reeives the signature of a neighbor node, which allows the node to add its neighbor to its trusted neighbor list.
+        > The SIGNATURES of the two communicating nodes are traded to each other, and once acknowledged, the neighbors respectively add each other onto their trusted neighbor lists.
+    > The NEIGH_SIGN case occurs during the signature trading process. Used for the above case where nodes add each other to their trusted lists provided that they can authenticate each other's lists.
+
+    > The AL_FULL case, while incomplete, will overwrite the authenticated list should it become full, taking the place of the oldest authenticated node.
+
+    > The AL_ROW case, while incomplete, will check to see if an authenticated node is already in an AL, error checking process?
+
+    > The AUTH_INVITE case, if the role of the node is UNAUTHENTICATED and the host node is READY, then it will send out to a MASTER NODE a request to be authenticated and hence part of the network.
+
+    > The AUTH_REQ case, if the role of the node is SP (Master Node), then if the SP is waiting for a request, then the SP will initiate the proxy certificate authentication process. This must be initiated from a non-Master Node.
+
+    > The AUTH_ISSUE case, the authentication certification is issued to the UNAUTHENTICATED node from the SP, and hence can be added to the network. The AL and NL are set up to reflect this.
+
+    > The NEIGH_PC_REQ receives the neighbor's Proxy Certificate and then sends its own PC to the neighbor. This is part of the proxy certificate trading process.
+
+    > The NEIGH_PC receives a neighbor's PC and adds the neighbor to the recepient's AL. The node then waits for the neighbor to do the same.
+
+    > The NEIGH_SIG_REQ case sends the KEYSTREAM to the neighbor and does nothing else.
+
+    > OTHERWISE, if the received data's header is unknown, then the received data is logged as unknown and no action is taken.
+
+> If BATMAN has found a new direct neighbor...
+> The dst sockaddr_in pointer is set to point at this new neighbor. 
+> Next, the new neighbor is checked against the AL to determine if it is in the list. (Come back here later, this code will be useful in implementing AL_FULL)
+    > Within this, the node will check to see if the neighbor has already sent a signature, hence not needing this process again.
+
+> If the neighbor is not in the authenticated list, processes will execute to add this neighbor to the AL. They will vary depending on the role of the host node.
+> If the host node is a MASTER NODE, then then the authentication process begins.
+> If the host node is just an authenticated node, then simply exchange PCs and SIGNATUREs.
+
+> If the new neighbor's keystream is not known, this is requested afterwards.
+
+> Every 60 seconds, a new SIGNATURE message is sent to all neigbors to actively authenticate their validity in the network.
+
+> If the 90% of the keystream capacity is being used, then more keystream is generated for more nodes to use. This is also accomplished by using the all_sign_send function.
+
+> A neighbor is purged from the trusted neighbor list should a keystream not be received within 130 seconds of the last one. This process does not depend on any other parameters or states.
+
+> The AM_MAIN thread will force the node to go to READY state should it not return to READY within three seconds of being in another state. This is done to prevent lock-ups caused by failure to revert to READY.
+
+> When BATMAN exits, the subject_name of the node is free'd, and the AM MAIN thread is ended.
+
+THIS ENDS HOW THE MAIN CODE OF THE AUTHENTICATION MODULE WORKS. 
