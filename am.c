@@ -104,8 +104,10 @@ unsigned char *auth_value;
 int auth_value_len;
 uint16_t auth_seq_num;
 
-trusted_node *authenticated_list[100];
-trusted_neigh *neigh_list[100];
+#define MAX_AUTH_NODES 100;
+#define MAX_NEIGH_NODES 100;
+trusted_node *authenticated_list[MAX_AUTH_NODES];
+trusted_neigh *neigh_list[MAX_NEIGH_NODES];
 int num_auth_nodes, num_trusted_neigh;
 
 pthread_mutex_t auth_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -314,10 +316,32 @@ void *am_main() {
 
 					break;
 
-				case AL_FULL:
+				case AL_FULL: //This case is not implemented in the code at all, and has been recently completed. --KB
 					/* Allowed in all states, must not be SP */
 					if(my_role == AUTHENTICATED) {
 						//TODO: Overwrite current local AL
+						//NUM AUTH NODES HOLDS HOW MANY NODES ARE IN THE AUTHENTICATED LIST AT A GIVEN MOMENT.
+						//Both num_auth_nodes and authenticated_list are global variables.
+
+						//The logic: First, sanity check the list, determine it is full by checking it against 100.
+						//Next, choose the FIRST node in the list, which God forbid ends up being commonly used, will iterate back into the list eventually.
+						if (num_auth_nodes == MAX_AUTH_NODES) //This will mirror neig_list_remove
+						{
+							//Free the first node in the AL.
+							free(authenticated_list[0]);
+
+							//Rearrange the Authenticated List to avoid scarce population.
+							for (int authListIter = 1; authListIter < num_auth_nodes; authListIter++)
+							{
+								authenticated_list[authListIter-1] = authenticated_list[authListIter];
+							}
+
+							//Finally, shrink the AL by 1!
+							num_auth_nodes--;
+
+							print("Authentication List is no longer full-- One space has been opened.")
+						}
+
 					}
 					break;
 
@@ -604,7 +628,7 @@ void *am_main() {
 }
 
 
-/* Add node to Authenticated List */
+/* Add node to Authenticated List */ //TO-DO: Implement a measure to determine if the authenticated list is full, and if so, clear out a space.
 void al_add(uint32_t addr, uint16_t id, role_type role, unsigned char *subject_name, EVP_PKEY *key) {
 
 	authenticated_list[num_auth_nodes] = malloc(sizeof(trusted_node));
@@ -1196,15 +1220,15 @@ char *all_sign_send(EVP_PKEY *pkey, EVP_CIPHER_CTX *master, int *key_count) {
 	/* Send Payload & Signature */
 	header = (am_packet *) malloc(sizeof(am_packet));
 	header->id = my_id;
-	header->type = SIGNATURE;
+	header->type = SIGNATURE; //This specifies the type of data being sent. This goes into the header.
 
 	auth_header = malloc(sizeof(routing_auth_packet));
 	auth_header->iv_len = strlen(b64_iv);
 	auth_header->rand_len = strlen(b64_rand);
-	auth_header->sign_len = strlen(b64_sign);
+	auth_header->sign_len = strlen(b64_sign); //The auth header contains the base 64 encryption information.
 
 
-	buf = malloc(MAXBUFLEN);
+	buf = malloc(MAXBUFLEN); 
 	memset(buf, 0, sizeof(buf));
 	memcpy(buf, header, sizeof(am_packet));
 	ptr = buf;
@@ -1420,7 +1444,7 @@ char *all_sign_send(EVP_PKEY *pkey, EVP_CIPHER_CTX *master, int *key_count) {
 //				free(iv);
 //
 
-				RSA *neig_rsa = authenticated_list[j]->pub_key->pkey.rsa;
+				RSA *neig_rsa = authenticated_list[j]->pub_key->pkey.rsa; //An RSA Key resides here. This is unique for each neighbor node.
 
 				unsigned char *encrypted_key = malloc(RSA_size(neig_rsa));
 				if(RSA_public_encrypt(AES_KEY_SIZE, current_key, encrypted_key, neig_rsa, RSA_PKCS1_OAEP_PADDING) == -1) {
@@ -1439,7 +1463,7 @@ char *all_sign_send(EVP_PKEY *pkey, EVP_CIPHER_CTX *master, int *key_count) {
 				packet_len = (ptr + strlen(b64_key)) - buf;
 
 				/* Send packet to neigh */
-				sendto(am_send_socket, buf, packet_len, 0, (sockaddr *)tmp_dest, sizeof(sockaddr_in));
+				sendto(am_send_socket, buf, packet_len, 0, (sockaddr *)tmp_dest, sizeof(sockaddr_in)); //This sends the authenticated packet to EACH neighbor in authenticated_list
 
 				/* Free */
 				free(encrypted_key);
@@ -1596,7 +1620,7 @@ am_type am_header_extract(char *buf, char **ptr, int *id) {
 
 	*id = header->id;
 
-	return header->type;
+	return header->type; //This returns the header, which is used above in a SWITCH to determine how to handle the incoming data.
 
 }
 
@@ -1834,7 +1858,7 @@ int auth_request_recv(char *addr, char *ptr) {
 
 }
 
-/* Receive PC Issue */
+/* Receive PC Issue */ //This comes from an SP
 int auth_issue_recv(char *ptr) {
 
 	printf("Received PC from SP\n");
@@ -1872,7 +1896,7 @@ void socks_am_setup(int32_t *recvsock, int32_t *sendsock) {
 	/* Set port number to addrinfo object */
 	char *port;
 	port = (char *) malloc(6);
-	sprintf(port, "%d", AM_PORT);
+	sprintf(port, "%d", AM_PORT); //Specified in header.
 
 	getaddrinfo(NULL, port, &hints, &res);
 
