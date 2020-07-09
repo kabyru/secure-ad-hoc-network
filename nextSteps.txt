@@ -1,0 +1,53 @@
+We need to implement a way that can
+figure out if a Master Node is missing.
+
+LINE 594, we can perhaps learn from
+nodes that are being purged if the
+MASTER node is being purged.
+
+role_type is defined in am.h, and
+is defined as:
+
+typedef enum role_type_en{
+	UNAUTHENTICATED,
+	AUTHENTICATED,
+	RESTRICTED,
+	MASTER,
+	SP
+} role_type;
+
+A possible solution for this would
+be the tracking of the ROLES of the
+connected nodes.
+
+How could these roles then be sent
+through the network? Is it possible
+to use auth_request_send and
+auth_issue_send to send roles between
+nodes?
+
+I would need to send it through an
+AM packet. It would be sent alongside
+the id and type of the packet.
+
+TO-DO:
+-Need to change the function call parameters
+for neigh_list_add to reflect that role_type
+has been added.
+-We need to modify neigh_list_remove to account
+for node_role - DONE.
+-Develop a reboot function that repurposes the node from AUTHENTICATED to SP if needed.
+
+DONE:
+-neigh_list_add properly adds node_role
+to the list.
+-Nodes can identify when an SP is not an immediate neighbor.
+
+WHAT DOES IT MEAN IF A NODE DOESN'T HAVE AN SP NEIGHBOR?
+-It means that in that node's immediate network, nodes cannot be authenticated!
+-However, nodes that are neighbors might be able to be authenticated as host nodes and neighbor nodes
+don't particularly share all the same neighbors.
+
+HOW COULD THiS BE SOLVED?
+-We reboot the AM and transition from an Authenticated Node to an SP.
+-We rely on the probability that an unauthenticated node will eventually land on an SP.

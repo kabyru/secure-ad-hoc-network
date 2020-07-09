@@ -123,6 +123,10 @@ int32_t am_send_socket, am_recv_socket;
 unsigned char *current_key = NULL;
 time_t last_send_time;
 
+/* Variables used by AM in case of a reboot. A reboot requires the parameters from BATMAN.c that are provided in am_thread_init. */
+//These might be unnecessary and covered above in previous global variable declarations.
+
+
 /* Usage function for my AM extension */
 void secure_usage() {
 	fprintf( stderr, "Secure Usage: batmand [options] -R/--role 'sp/authenticated/restricted' interface [interface interface]\n" );
@@ -197,6 +201,8 @@ void *am_main() {
 
 	int key_count = 0;
 	int rcvd_id;
+	//Received role type has been added here.
+	role_type rcvd_role;
 	time_t test_timer = 0, state_timer = 0;
 
 
@@ -268,7 +274,7 @@ void *am_main() {
 		}
 
 		if(data_rcvd) {
-			am_type_rcvd = am_header_extract(am_recv_buf_ptr, &am_payload_ptr, &rcvd_id);
+			am_type_rcvd = am_header_extract(am_recv_buf_ptr, &am_payload_ptr, &rcvd_id, &rcvd_role);
 
 			in_addr neigh_addr;
 			neigh_addr = ((sockaddr_in*)((sockaddr *)&recv_addr))->sin_addr;
@@ -280,7 +286,7 @@ void *am_main() {
 
 					if (my_state == WAIT_FOR_NEIGH_SIG_ACK) {
 
-						neigh_list_add(dst->sin_addr.s_addr, rcvd_id, NULL);
+						neigh_list_add(dst->sin_addr.s_addr, rcvd_id, rcvd_role, NULL);
 						al_add(dst->sin_addr.s_addr, rcvd_id, AUTHENTICATED, subject_name, tmp_pub);
 
 						if(pthread_mutex_trylock(&auth_lock) == 0) {
@@ -411,10 +417,11 @@ void *am_main() {
 							my_state = READY;
 							my_role = AUTHENTICATED;
 
+							//This is where the magic happens. We need to extract the node_role which is part of the AM Packet, and then implment that as part of the neighbor list.
 							in_addr emptyaddr;
 							emptyaddr.s_addr = 0;
 							openssl_cert_read(emptyaddr , &subject_name, &tmp_pub);
-							neigh_list_add(neigh_addr.s_addr, rcvd_id, NULL);
+							neigh_list_add(neigh_addr.s_addr, rcvd_id, rcvd_role, NULL);
 							al_add(neigh_addr.s_addr, rcvd_id, SP, subject_name, tmp_pub);
 							printf("1\n");
 							EVP_PKEY_free(tmp_pub);
@@ -600,6 +607,20 @@ void *am_main() {
 				}
 
 			}
+			//There are probably better ways to implement this, but we now need to check the neighbor list to see if an SP is in the list. If there is no SP in the neighbor list, then this is a problem!
+			int roleIter;
+			for (roleIter = 0; roleIter < num_trusted_neigh; roleIter++)
+			{
+				if (neigh_list[roleIter]->node_role == SP)
+				{
+					break;
+				}
+			}
+			//Now, check if the previous for-loop failed to find any SPs in the neighbor list. Looking at code from Line 716...
+			if (roleIter == num_trusted_neigh)
+			{
+				printf("No SP is present in the neighbor list!! No new nodes can be added to the neighbor's immediate network!\n")
+			}
 		}
 
 		/* Check state, if state not READY for a while (3 seconds), go to READY */
@@ -671,7 +692,7 @@ void al_add(uint32_t addr, uint16_t id, role_type role, unsigned char *subject_n
 }
 
 /* Add node to trusted neighbor list */ //MAC contains the keystream data.
-void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value) {
+void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned char *mac_value) {
 
 	int i;
 	for(i=0; i<num_trusted_neigh; i++) {
@@ -679,7 +700,10 @@ void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value) {
 
 			if(addr == neigh_list[i]->addr) {
 
-				if(neigh_list[i]->mac != NULL)
+				//We need to add another layer of authentication here: if receivedRole == neigh_list[i]->node_role
+				if (receivedRole == neigh_list[i]->node_role)
+				{
+					if(neigh_list[i]->mac != NULL)
 					free(neigh_list[i]->mac);
 
 				neigh_list[i]->mac = mac_value;
@@ -689,6 +713,8 @@ void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value) {
 				neigh_list[i]->num_keystream_fails = 0;
 
 				printf("Added new keystream to node already in neighbor list\n");
+				}
+				
 
 			} else {
 
@@ -713,6 +739,8 @@ void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value) {
 		neigh_list[num_trusted_neigh]->last_seq_num = 0;
 		neigh_list[num_trusted_neigh]->last_rcvd_time = time (NULL);
 		neigh_list[num_trusted_neigh]->num_keystream_fails = 0;
+		//Now, add the node_role
+		neigh_list[num_trusted_neigh]->node_role = receivedRole;
 		num_trusted_neigh++;
 
 		printf("Added new node to neighbor list\n");
@@ -1034,6 +1062,7 @@ void auth_request_send(sockaddr_in *sin_dest) {
 	header = (am_packet *) malloc(sizeof(am_packet));
 	header->id = my_id;
 	header->type = AUTH_REQ;
+	header->node_role = my_role;
 
 	buf = malloc(MAXBUFLEN);
 	memset(buf, 0, sizeof(buf));
@@ -1067,6 +1096,7 @@ void auth_issue_send(sockaddr_in *sin_dest) {
 	am_header = (am_packet *) malloc(sizeof(am_packet));
 	am_header->id = my_id;
 	am_header->type = AUTH_ISSUE;
+	am_header->node_role = my_role; //This would send to the recipient the role of the source node. This might break things.
 
 	buf = malloc(MAXBUFLEN);
 	memset(buf, 0, sizeof(buf));
@@ -1610,7 +1640,7 @@ void neigh_sign_req_send(uint32_t addr) {
 
 
 /* Extract AM Data Type From Received AM Packet */
-am_type am_header_extract(char *buf, char **ptr, int *id) {
+am_type am_header_extract(char *buf, char **ptr, int *id, role_type *role_of_rcvd_node) {
 
 	am_packet *header;
 	header = (am_packet *)buf;
@@ -1619,6 +1649,8 @@ am_type am_header_extract(char *buf, char **ptr, int *id) {
 	*ptr += sizeof(am_packet);
 
 	*id = header->id;
+
+	*role_of_rcvd_node = header->node_role; //This returns back the received node role. This is new from (7/9)
 
 	return header->type; //This returns the header, which is used above in a SWITCH to determine how to handle the incoming data.
 

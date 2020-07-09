@@ -159,59 +159,6 @@ typedef struct in_addr in_addr;
 typedef struct timeval timeval;
 
 
-/* AM Structs */
-
-typedef char * secure_t;
-typedef struct {
-
-struct {
-uint32_t key;
-uint32_t mac;
-uint32_t orig;
-uint32_t body;
-} length;
-
-} secure_head_t;
-
-typedef struct trusted_node_st {
-	uint16_t 		id;			//unique
-	uint32_t		addr;		//unique ip addr
-	uint8_t			role;		//SP, AUTH or whatever (might use proxypolicy rules)
-	unsigned char	*name;		//Unique PC subject name
-	EVP_PKEY 		*pub_key;	//Public Key of node
-
-} trusted_node;
-
-typedef struct trusted_neigh_st {
-	uint16_t 		id;				//unique
-	uint32_t		addr;			//unique ip addr
-	uint64_t		window;			//Sliding window, if a bit is set 0 that pkt not received, else received
-	uint16_t		last_seq_num;	//Used with sliding windows
-	unsigned char	*mac;			//Message Authentication Code (current)
-	time_t 			last_rcvd_time;
-	uint8_t			num_keystream_fails;
-} trusted_neigh;
-
-typedef struct am_packet_st {
-	uint16_t 	id;
-	uint8_t 	type;
-} __attribute__((packed)) am_packet;
-
-typedef struct routing_auth_packet_st {
-	uint16_t 	rand_len;
-	uint8_t 	iv_len;
-	uint8_t		sign_len;
-//	uint8_t 	key_len;
-}__attribute__((packed)) routing_auth_packet;
-
-//typedef struct routing_auth_packet_st {
-//	unsigned char rand[RAND_LEN*(4/3)+3];
-//	unsigned char key[AES_KEY_SIZE];
-//	unsigned char iv[AES_IV_SIZE];
-//}__attribute__((packed)) routing_auth_packet;
-
-
-
 /* AM Enums */
 typedef enum am_state_en {
 	READY,					//0
@@ -251,6 +198,59 @@ typedef enum role_type_en{
 	SP
 } role_type;
 
+
+/* AM Structs */
+
+typedef char * secure_t;
+typedef struct {
+
+struct {
+uint32_t key;
+uint32_t mac;
+uint32_t orig;
+uint32_t body;
+} length;
+
+} secure_head_t;
+
+typedef struct trusted_node_st {
+	uint16_t 		id;			//unique
+	uint32_t		addr;		//unique ip addr
+	uint8_t			role;		//SP, AUTH or whatever (might use proxypolicy rules)
+	unsigned char	*name;		//Unique PC subject name
+	EVP_PKEY 		*pub_key;	//Public Key of node
+
+} trusted_node;
+
+typedef struct trusted_neigh_st {
+	uint16_t 		id;				//unique
+	uint32_t		addr;			//unique ip addr
+	uint64_t		window;			//Sliding window, if a bit is set 0 that pkt not received, else received
+	uint16_t		last_seq_num;	//Used with sliding windows
+	unsigned char	*mac;			//Message Authentication Code (current)
+	time_t 			last_rcvd_time;
+	uint8_t			num_keystream_fails;
+	role_type 		node_role; //Added node_role here! (7/9)
+} trusted_neigh;
+
+typedef struct am_packet_st {
+	uint16_t 	id;
+	uint8_t 	type;
+	role_type	node_role; //Added node_role here! (7/9)
+} __attribute__((packed)) am_packet;
+
+typedef struct routing_auth_packet_st {
+	uint16_t 	rand_len;
+	uint8_t 	iv_len;
+	uint8_t		sign_len;
+//	uint8_t 	key_len;
+}__attribute__((packed)) routing_auth_packet;
+
+//typedef struct routing_auth_packet_st {
+//	unsigned char rand[RAND_LEN*(4/3)+3];
+//	unsigned char key[AES_KEY_SIZE];
+//	unsigned char iv[AES_IV_SIZE];
+//}__attribute__((packed)) routing_auth_packet;
 
 
 
