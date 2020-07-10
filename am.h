@@ -175,6 +175,13 @@ typedef enum am_state_en {
 	WAIT_FOR_REQ_SIG
 } am_state;
 
+//This enum corresponds to the process nodes do to determine if they need to become SPs since an SP in their network is missing.
+//This enum will also prevent neighboring nodes from becoming new nodes too.
+typedef enum looking_for_sp_en {
+	NOT_LOOKING,			//0
+	MIGHT_BECOME_SP			//1
+} sp_search_state;
+
 typedef enum am_type_en{
 	NO_AM_DATA,
 	SIGNATURE,
@@ -222,6 +229,12 @@ typedef struct trusted_node_st {
 
 } trusted_node;
 
+//This is where the SP list would go
+typedef struct trusted_sp_st {
+	uint16_t		id;			//The unique ID of the SP node
+	EVP_PKEY		*pub_key; 	//The public key of the SP node, which is used to validate nodes.
+} sp_struct;
+
 typedef struct trusted_neigh_st {
 	uint16_t 		id;				//unique
 	uint32_t		addr;			//unique ip addr
@@ -230,7 +243,7 @@ typedef struct trusted_neigh_st {
 	unsigned char	*mac;			//Message Authentication Code (current)
 	time_t 			last_rcvd_time;
 	uint8_t			num_keystream_fails;
-	role_type 		node_role; //Added node_role here! (7/9)
+	role_type 		node_role; //Added node_role here! (7/9) We may want to change this to uint8_t
 } trusted_neigh;
 
 typedef struct am_packet_st {
