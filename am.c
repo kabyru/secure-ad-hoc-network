@@ -104,8 +104,8 @@ unsigned char *auth_value;
 int auth_value_len;
 uint16_t auth_seq_num;
 
-#define MAX_AUTH_NODES 100;
-#define MAX_NEIGH_NODES 100;
+#define MAX_AUTH_NODES 100
+#define MAX_NEIGH_NODES 100
 trusted_node *authenticated_list[MAX_AUTH_NODES];
 trusted_neigh *neigh_list[MAX_NEIGH_NODES];
 int num_auth_nodes, num_trusted_neigh;
@@ -2295,7 +2295,7 @@ int openssl_cert_mkcert(EVP_PKEY **pkey, X509_REQ *req,X509 **pc1p, X509 **pc0p,
 	ASN1_INTEGER_set(X509_get_serialNumber(cert), rand()%INT32_MAX);
 
 	/* Set issuer */
-	if(X509_set_issuer_name(cert, issuer_name) != 1)
+	if(X509_set_issuer_name(cert, issuer_name) != 1) //issuer_name = X509_get_subject_name(*pc0p)
 		fprintf(stderr,"Error setting the issuer name");
 
 	/* Set subject name from issuer name */
@@ -2363,7 +2363,7 @@ int openssl_cert_mkcert(EVP_PKEY **pkey, X509_REQ *req,X509 **pc1p, X509 **pc0p,
 		return 1;
 	}
 
-	if(!(X509_sign(cert, my_pkey, digest)))
+	if(!(X509_sign(cert, my_pkey, digest))) //Sign the PC1 with the PC0's private key and digest.
 		fprintf(stderr,"Error signing cert");
 
 

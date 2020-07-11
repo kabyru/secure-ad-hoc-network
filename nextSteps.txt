@@ -106,3 +106,13 @@ to all the nodes in the network to purge their certificates and "start over"
 -Do we want to keep multiple SPs in a network?
 	-At that point, it may be required to keep an updated SP List on all nodes in the network
 	-On the off-chance that they encounter a node from other SP, they can still connect and interact.
+
+
+NOTES from 7/11:
+-ISSUED_CERT is the PC1 that gets sent to an unauthenticated node.
+-MY_CERT (when on an SP) is the PC0.
+-my_pkey ist he private key of the SP
+-cert is the temp name of the PC1 being created.
+
+-req_pkey is the Request's Public Key
+-Every node has a unique public key.
