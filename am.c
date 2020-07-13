@@ -171,6 +171,9 @@ void am_thread_kill() {
 
 }
 
+/* TO-DO: A reboot function will need to be implemented. */
+//void am_thread_reboot()
+
 
 /* AM main thread */
 void *am_main() {
@@ -740,10 +743,30 @@ void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned
 		neigh_list[num_trusted_neigh]->last_rcvd_time = time (NULL);
 		neigh_list[num_trusted_neigh]->num_keystream_fails = 0;
 		//Now, add the node_role
-		neigh_list[num_trusted_neigh]->node_role = receivedRole;
+
+		//It may be better to assign node_role by pulling this role from the AL.
+		for (int authIter = 0; authIter < MAX_AUTH_NODES; authIter++)
+		{
+			if (authenticated_list[authIter]->id == id)
+			{
+				neighList[num_trusted_neigh]->node_role = authenticated_list[authIter]->role;
+				//We may need to go back and change the type for role to <<uint8_t>>
+			}
+		}
+		//If, for some reason, the neighbor node is not in the Authenticated List. This SHOULDN'T happen.
+		if (authIter == MAX_AUTH_NODES)
+		{
+			neigh_list[num_trusted_neigh]->node_role = receivedRole;
+		}
+
 		num_trusted_neigh++;
 
 		printf("Added new node to neighbor list\n");
+		
+		//Print the details about the new node added to the neighbor list.
+		//This will print the ID and the Role Type of the new node discovered.
+		printf("ID: %u\n", (unsigned int)neigh_list[num_trusted_neigh-1]->id);
+		printf("Role Type: %u\n", (unsigned int)neigh_list[num_trusted_neigh-1]->node_role)
 
 	}
 

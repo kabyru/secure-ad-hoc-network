@@ -172,12 +172,16 @@ typedef enum am_state_en {
 	WAIT_FOR_NEIGH_SIG,		//8
 	WAIT_FOR_NEIGH_PC,		//8
 	WAIT_FOR_NEIGH_SIG_ACK,	//9 - special for SP waiting for sign as "ACK" after ISSUE
-	WAIT_FOR_REQ_SIG
+	WAIT_FOR_REQ_SIG,
+	LOOKING_FOR_SP,			//This is the state of the node that sends out the first REQ to neighbors to find the SP. The node holding this status will become the SP if no SP can be found.
+	FORWARDED_SP_REQ_TO_NEIGH, //This status is for nodes that have already forwarded SP Search Requests. Prevents multiple connected neighbors to forward to this node.
+	FORWARDED_SP_RESP_TO_NEIGH //This status is for nodes that have already forwarded FOUND SP responses to neighbors. This is the reply status to the search status above.
 } am_state;
 
 //This enum corresponds to the process nodes do to determine if they need to become SPs since an SP in their network is missing.
 //This enum will also prevent neighboring nodes from becoming new nodes too.
-typedef enum looking_for_sp_en {
+//This may or may not be integrated into am_state_en. Have not decided yet.
+typedef enum looking_for_sp_en { 
 	NOT_LOOKING,			//0
 	MIGHT_BECOME_SP			//1
 } sp_search_state;
