@@ -97,6 +97,7 @@ void tool_dump_memory(unsigned char* data, size_t len) {
 /* External Variables */
 role_type my_role, req_role;
 am_state my_state;
+sp_search_state sp_search_status;
 pthread_t am_main_thread;
 uint32_t new_neighbor, prev_neighbor;
 //uint32_t trusted_neighbors[100];
@@ -263,6 +264,8 @@ void *am_main() {
 	am_payload_ptr = NULL;
 	dst = NULL;
 
+	sp_search_status = HAVE_NOT_BEEN_ASKED; //Initially sets that a node has not been asked about an SP.
+
 	/* Main loop for the AM thread, will only exit when Batman is terminated */
 	while(1) {
 
@@ -313,6 +316,35 @@ void *am_main() {
 					new_neighbor = 0;
 					break;
 
+				case SP_LOOK_REQ:
+					//Occurs in nodes that receive requests to look for SP nodes in their neighbor lists.
+
+					//A function will search the neighbor list and return a value that reflects whether an SP exists within the neighbor list or not.
+					//We have rcvd_id to work with, which is the unique ID of the sender. We can use this to prevent the function from sending a SP Search REQ back to it.
+					int SPSearch = neighbor_sp_scour();
+
+					//This means that an SP was not found, but the neighbor list has nodes we can send this request to as well.
+					if (SPSearch == 2)
+					{
+						//We can use neighbor_nudge to send this request to this node's neighbors.
+						neighbor_nudge(SP_LOOK_REQ);
+					}
+
+					//This means that an SP Node was found IN THIS NODE'S NEIGHBOR LIST. This means the APB process is over for the network, and we need to send it back!
+					if (SPSearch == 0)
+					{
+						
+					}
+
+					break;
+				
+				
+				
+				
+				
+				
+				
+				
 				case NEIGH_SIGN:
 					/* Allowed in all states */
 
@@ -610,6 +642,8 @@ void *am_main() {
 				}
 
 			}
+
+			///CODE CONSTRUCTION HERE/// -- 7/13/20
 			//There are probably better ways to implement this, but we now need to check the neighbor list to see if an SP is in the list. If there is no SP in the neighbor list, then this is a problem!
 			int roleIter;
 			for (roleIter = 0; roleIter < num_trusted_neigh; roleIter++)
@@ -622,8 +656,26 @@ void *am_main() {
 			//Now, check if the previous for-loop failed to find any SPs in the neighbor list. Looking at code from Line 716...
 			if (roleIter == num_trusted_neigh)
 			{
-				printf("No SP is present in the neighbor list!! No new nodes can be added to the neighbor's immediate network!\n")
+				printf("No SP is present in the neighbor list!! No new nodes can be added to the neighbor's immediate network!\n");
+				//Now the fun begins! We now need to begin the SP Search process. This will happen on every node that cannot find an SP in their neighbor network.
+				//However, this poses a problem. This might occur on other nodes in the network!
+				//The solution: Begin a "presidential" candidacy to find a new SP should an APB to find the SP fails.
+				
+				//The state will be set to LOOKING_FOR_SP until a reply notifies that an SP has been found.
+				//OR, an SP is never found. Perhaps through a time-out?
+				my_state = LOOKING_FOR_SP;
+				//This will start the SP Search process
+				SPSearchStart = all_points_bulletin();
+
 			}
+			else
+			{
+				printf("An SP is present in this node's neighbor list. No problem here!\n");
+			}
+			
+
+			///END CODE CONSTRUCTION///
+
 		}
 
 		/* Check state, if state not READY for a while (3 seconds), go to READY */
@@ -649,6 +701,90 @@ void *am_main() {
 	}
 	free(subject_name);
 	pthread_exit(NULL);
+}
+
+/*Begin an "All Points Bulletin" that tries to look for an SP by searching the neighbor lists of neighbor nodes to the flagging node. */
+//The state of the node MUST be "LOOKING_FOR_SP" for this to happen.
+int all_points_bulletin()
+{
+	//Sanity Check: Make sure the node has rights to use this function. Must be looking for an SP!
+	if (my_state != LOOKING_FOR_SP)
+	{
+		print("Error! The state of the node is NOT 'LOOKING_FOR_SP'. The node does not have access to this function!\n");
+		return -1;
+	}
+
+	neighbor_nudge(SP_LOOK_REQ); //Will send to all neighbors in the network a request to look for an SP.
+
+}
+
+/*General Function to send quick messages to neighbor nodes*/
+void neighbor_nudge(am_type what_purpose)
+{
+	am_packet *header;
+
+	header = (am_packet *) malloc(sizeof(am_packet)); //Malloc call. Gives memory to create am_packet.
+	header->id = my_id;
+	header->type = what_purpose; //New type of send within enum am_type
+	header->node_role = my_role;
+
+
+	sockaddr_in dst;
+	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
+	{
+		dst.sin_addr.s_addr = neigh_list[neighIter]->addr; //Pulls the IP Address of the neighbor.
+		dst.sin_family = AF_INET;
+		dst.sin_port = htons(AM_PORT);
+
+		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
+	}
+}
+
+/*General Function to return SP Reply to nodes in the network. Triggers when SPSearch = 0 */
+void neighbor_nudge_sp_reply(am_type what_purpose, uint32_t SP_Node_Address)
+{
+	am_packet *header;
+
+	header = (am_packet *) malloc(sizeof(am_packet)); //Malloc call. Gives memory to create am_packet.
+	header->id;
+}
+
+/* Scour neighbor lists and return if an SP exists. Either return "YES, there is one", "NO, but I have neighbors to ask" or "NO, and I have no more neighbors to ask." */
+int neighbor_sp_scour(int senderID)
+{
+	if (sp_search_status == HAVE_BEEN_ASKED)
+	{
+		//This will notify the caller that this node has already been searched.
+		//This prevents double searches and double sends from multiple nodes.
+		return -1
+	}
+	sp_search_status = HAVE_BEEN_ASKED;
+	//Now, begin the searching process
+	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
+	{
+		//If an SP is found in the node's neighbor list, then the search process is complete.
+		if (neigh_list[neighIter]->node_role == SP)
+		{
+			printf("An SP has been found in this neighbor list!\n");
+			return 0;
+		}
+	}
+	
+	//Code inside will run if no SP node was found in the neighbor list
+	if (neighIter == num_trusted_neigh)
+	{
+		if (num_trusted_neigh == 1 && neigh_list[num_trusted_neigh-1]->id == senderID)
+		{
+			printf("No SP node exists in the neighbor list, and I have no neighbors to send to!\n");
+			return 1
+		}
+		else
+		{
+			print("No SP node exists in the neighbor list, but I have some neighbors to ask!\n");
+			return 2;
+		}
+		
+	}
 }
 
 
@@ -702,12 +838,9 @@ void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned
 		if(id == neigh_list[i]->id) {
 
 			if(addr == neigh_list[i]->addr) {
-
-				//We need to add another layer of authentication here: if receivedRole == neigh_list[i]->node_role
-				if (receivedRole == neigh_list[i]->node_role)
-				{
-					if(neigh_list[i]->mac != NULL)
-					free(neigh_list[i]->mac);
+				
+				if(neigh_list[i]->mac != NULL)
+						free(neigh_list[i]->mac);
 
 				neigh_list[i]->mac = mac_value;
 				neigh_list[i]->window = 0;
@@ -716,7 +849,7 @@ void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned
 				neigh_list[i]->num_keystream_fails = 0;
 
 				printf("Added new keystream to node already in neighbor list\n");
-				}
+				
 				
 
 			} else {
@@ -1280,6 +1413,7 @@ char *all_sign_send(EVP_PKEY *pkey, EVP_CIPHER_CTX *master, int *key_count) {
 	header = (am_packet *) malloc(sizeof(am_packet));
 	header->id = my_id;
 	header->type = SIGNATURE; //This specifies the type of data being sent. This goes into the header.
+	header->node_role = my_role;
 
 	auth_header = malloc(sizeof(routing_auth_packet));
 	auth_header->iv_len = strlen(b64_iv);
@@ -1469,6 +1603,7 @@ void neigh_sign_req_send(uint32_t addr) {
 	am_header = (am_packet *) malloc(sizeof(am_packet));
 	am_header->id = my_id;
 	am_header->type = NEIGH_SIG_REQ;
+	am_header->node_role = my_role;
 
 	sockaddr_in dst;
 	dst.sin_addr.s_addr = addr;

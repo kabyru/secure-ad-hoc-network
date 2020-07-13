@@ -182,9 +182,16 @@ typedef enum am_state_en {
 //This enum will also prevent neighboring nodes from becoming new nodes too.
 //This may or may not be integrated into am_state_en. Have not decided yet.
 typedef enum looking_for_sp_en { 
-	NOT_LOOKING,			//0
-	MIGHT_BECOME_SP			//1
+	HAVE_NOT_BEEN_ASKED,	//0
+	HAVE_BEEN_ASKED			//1
 } sp_search_state;
+
+//This enum corresponds to the process of sending back the location of the SP node to the originator.
+//Very similar to sp_search_state but this is for the reply.
+typedef enum sending_back_sp_en {
+	HAVE_NOT_SENT_BACK,		//0
+	HAVE_SENT_BACK			//1
+} sp_sendback_state;
 
 typedef enum am_type_en{
 	NO_AM_DATA,
@@ -198,7 +205,9 @@ typedef enum am_type_en{
 	NEIGH_PC,
 	NEIGH_SIGN,
 	NEIGH_PC_REQ,
-	NEIGH_SIG_REQ
+	NEIGH_SIG_REQ,
+	SP_LOOK_REQ,
+	SP_FOUND_REPLY
 } am_type;
 
 typedef enum role_type_en{
@@ -247,13 +256,16 @@ typedef struct trusted_neigh_st {
 	unsigned char	*mac;			//Message Authentication Code (current)
 	time_t 			last_rcvd_time;
 	uint8_t			num_keystream_fails;
-	role_type 		node_role; //Added node_role here! (7/9) We may want to change this to uint8_t
+	uint8_t 		node_role; //Added node_role here! (7/9) We may want to change this to uint8_t
 } trusted_neigh;
 
 typedef struct am_packet_st {
 	uint16_t 	id;
 	uint8_t 	type;
-	role_type	node_role; //Added node_role here! (7/9)
+	uint8_t		node_role; //Added node_role here! (7/9)
+
+	//Consider expanding the entries within this packet, this will make SP Replies so much smoother.
+
 } __attribute__((packed)) am_packet;
 
 typedef struct routing_auth_packet_st {
@@ -349,6 +361,7 @@ void secure_usage();
 /* Necessary external variables */
 extern role_type my_role, req_role;
 extern am_state my_state;
+extern sp_search_state sp_search_status;
 extern pthread_t am_main_thread;
 extern uint32_t new_neighbor;
 extern uint32_t trusted_neighbors[100];
