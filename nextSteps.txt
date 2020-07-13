@@ -116,3 +116,9 @@ NOTES from 7/11:
 
 -req_pkey is the Request's Public Key
 -Every node has a unique public key.
+
+TO DECIDE BETWEEN WHICH NODE WILL BECOME THE SP IF NEEDED:
+-Nodes will log at what time (in Epoch time) they flagged an issue, and send this as a packet to
+neighbors.
+-If the sent packet has an earlier timestamp, the recipient node yields and stops ops.
+-Otherwise, it still remains the candidate for becoming an SP.
