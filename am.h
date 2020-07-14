@@ -173,9 +173,9 @@ typedef enum am_state_en {
 	WAIT_FOR_NEIGH_PC,		//8
 	WAIT_FOR_NEIGH_SIG_ACK,	//9 - special for SP waiting for sign as "ACK" after ISSUE
 	WAIT_FOR_REQ_SIG,
-	LOOKING_FOR_SP,			//This is the state of the node that sends out the first REQ to neighbors to find the SP. The node holding this status will become the SP if no SP can be found.
-	FORWARDED_SP_REQ_TO_NEIGH, //This status is for nodes that have already forwarded SP Search Requests. Prevents multiple connected neighbors to forward to this node.
-	FORWARDED_SP_RESP_TO_NEIGH //This status is for nodes that have already forwarded FOUND SP responses to neighbors. This is the reply status to the search status above.
+	LOOKING_FOR_SP			//This is the state of the node that sends out the first REQ to neighbors to find the SP. The node holding this status will become the SP if no SP can be found.
+	//FORWARDED_SP_REQ_TO_NEIGH, //This status is for nodes that have already forwarded SP Search Requests. Prevents multiple connected neighbors to forward to this node.
+	//FORWARDED_SP_RESP_TO_NEIGH //This status is for nodes that have already forwarded FOUND SP responses to neighbors. This is the reply status to the search status above.
 } am_state;
 
 //This enum corresponds to the process nodes do to determine if they need to become SPs since an SP in their network is missing.
@@ -263,6 +263,9 @@ typedef struct am_packet_st {
 	uint16_t 	id;
 	uint8_t 	type;
 	uint8_t		node_role; //Added node_role here! (7/9)
+	uint16_t	found_sp_id; //Holds the ID of the SP Node found in the network.
+	uint32_t	found_sp_addr; //Holds the IP address of the SP Node found in the network.
+	uint16_t	num_nodes_over; //This tells how many nodes the request or reply had to travel to get to the SP node.
 
 	//Consider expanding the entries within this packet, this will make SP Replies so much smoother.
 

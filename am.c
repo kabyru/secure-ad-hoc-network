@@ -124,6 +124,11 @@ int32_t am_send_socket, am_recv_socket;
 unsigned char *current_key = NULL;
 time_t last_send_time;
 
+//Global variables used in SP_LOOK_REQ operations
+uint16_t foundSPID;
+uint32_t foundSPAddr;
+uint16_t numNodesOver = 0;
+
 /* Variables used by AM in case of a reboot. A reboot requires the parameters from BATMAN.c that are provided in am_thread_init. */
 //These might be unnecessary and covered above in previous global variable declarations.
 
@@ -280,7 +285,7 @@ void *am_main() {
 		}
 
 		if(data_rcvd) {
-			am_type_rcvd = am_header_extract(am_recv_buf_ptr, &am_payload_ptr, &rcvd_id, &rcvd_role);
+			am_type_rcvd = am_header_extract(am_recv_buf_ptr, &am_payload_ptr, &rcvd_id, &rcvd_role, &foundSPID, &foundSPAddr, &numNodesOver);
 
 			in_addr neigh_addr;
 			neigh_addr = ((sockaddr_in*)((sockaddr *)&recv_addr))->sin_addr;
@@ -321,27 +326,61 @@ void *am_main() {
 
 					//A function will search the neighbor list and return a value that reflects whether an SP exists within the neighbor list or not.
 					//We have rcvd_id to work with, which is the unique ID of the sender. We can use this to prevent the function from sending a SP Search REQ back to it.
+					
 					int SPSearch = neighbor_sp_scour();
 
+					//This means that this node has already searched for an SP and acted.
+					//No need to double send!
+					if (SPSearch == -1)
+					{
+						printf("Node has already looked for an SP! Preventing double-send loop...\n");
+					}
+
 					//This means that an SP was not found, but the neighbor list has nodes we can send this request to as well.
-					if (SPSearch == 2)
+					else if (SPSearch == 2)
 					{
 						//We can use neighbor_nudge to send this request to this node's neighbors.
+						numNodesOver++;
 						neighbor_nudge(SP_LOOK_REQ);
 					}
 
 					//This means that an SP Node was found IN THIS NODE'S NEIGHBOR LIST. This means the APB process is over for the network, and we need to send it back!
-					if (SPSearch == 0)
+					else if (SPSearch == 0)
 					{
-						
+						sp_reply_start();
 					}
 
 					break;
 				
-				
-				
-				
-				
+				case SP_FOUND_REPLY:
+
+					if (sp_sendback_state == HAVE_SENT_BACK)
+					{
+						//This occurs if this node has already forwarded the SP reply.
+						//No need to double send!
+						printf("Node has already forwarded SP reply! Preventing double-send loop...\n");
+					}
+
+					else if (my_state == LOOKING_FOR_SP)
+					{
+						//This occurs if the node that receives this is the one that originated the request.
+						printf("An SP Node has been found in the network!\n");
+						//Now print the details of the found node.
+						printf("ID of found SP Node: %u\n", (unsigned int)foundSPID);
+						printf("IP Address of found SP Node: %lu\n", (unsigned long)foundSPAddr);
+						printf("Number of Nodes away: %u\n", (unsigned int)numNodesOver);
+
+						//Now that this mystery has been solved, we can revert this node back to READY
+						my_state = READY;
+					}
+					else
+					{
+						//This occurs when we have not reached the originator node yet.
+						numNodesOver++; //Increments the number of nodes over.
+						neighbor_nudge_sp_reply(SP_FOUND_REPLY);
+					}
+
+					break;
 				
 				
 				
@@ -727,6 +766,9 @@ void neighbor_nudge(am_type what_purpose)
 	header->id = my_id;
 	header->type = what_purpose; //New type of send within enum am_type
 	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = 0;
+	header->num_nodes_over = numNodesOver; //Will increment with each send to a new node.
 
 
 	sockaddr_in dst;
@@ -737,16 +779,46 @@ void neighbor_nudge(am_type what_purpose)
 		dst.sin_port = htons(AM_PORT);
 
 		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
+		sp_search_state = HAVE_BEEN_ASKED;
 	}
+
+	//Now, change the state of the node to reflect 
+}
+
+void sp_reply_start()
+{
+	//foundSPID
+	//foundSPAddress
+	//numNodesOver
+
+	numNodesOver = 0;
+	neighbor_nudge_sp_reply(SP_FOUND_REPLY);
 }
 
 /*General Function to return SP Reply to nodes in the network. Triggers when SPSearch = 0 */
-void neighbor_nudge_sp_reply(am_type what_purpose, uint32_t SP_Node_Address)
+void neighbor_nudge_sp_reply(am_type what_purpose)
 {
 	am_packet *header;
 
 	header = (am_packet *) malloc(sizeof(am_packet)); //Malloc call. Gives memory to create am_packet.
-	header->id;
+	header->id = my_id;
+	header->type = SP_FOUND_REPLY; //This type will tell nodes to keep spreading the word that an SP was found!
+	header->node_role = my_role;
+	header->found_sp_id = foundSPID;
+	header->found_sp_addr = foundSPAddr;
+	header->num_nodes_over = numNodesOver;
+
+	sockaddr_in dst;
+	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
+	{
+		dst.sin_addr.s_addr = neigh_list[neighIter]->addr; //Pulls the IP Address of the header
+		dst.sin_family = AF_INET;
+		dst.sin_port = htons(AM_PORT);
+
+		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
+	}
+
+	sp_sendback_state = HAVE_SENT_BACK;
 }
 
 /* Scour neighbor lists and return if an SP exists. Either return "YES, there is one", "NO, but I have neighbors to ask" or "NO, and I have no more neighbors to ask." */
@@ -758,7 +830,7 @@ int neighbor_sp_scour(int senderID)
 		//This prevents double searches and double sends from multiple nodes.
 		return -1
 	}
-	sp_search_status = HAVE_BEEN_ASKED;
+	//sp_search_status = HAVE_BEEN_ASKED;
 	//Now, begin the searching process
 	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
 	{
@@ -766,6 +838,8 @@ int neighbor_sp_scour(int senderID)
 		if (neigh_list[neighIter]->node_role == SP)
 		{
 			printf("An SP has been found in this neighbor list!\n");
+			foundSPID = neigh_list[neighIter]->id;
+			foundSPAddr = neigh_list[neighIter]->addr;
 			return 0;
 		}
 	}
@@ -1177,6 +1251,7 @@ int openssl_cert_read(in_addr addr, unsigned char **s, EVP_PKEY **p) {
 
 
 
+/*This may cause issues because we changed the size of am_packet*/
 /* Send PC Handshake Invite */
 void auth_invite_send(sockaddr_in *sin_dest) {
 
@@ -1190,6 +1265,10 @@ void auth_invite_send(sockaddr_in *sin_dest) {
 	header = (am_packet *) malloc(sizeof(am_packet));
 	header->id = my_id;
 	header->type = AUTH_INVITE;
+	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = 0;
+	header->num_nodes_over = 0;
 
 	buf = malloc(MAXBUFLEN);
 	memset(buf, 0, sizeof(buf));
@@ -1212,6 +1291,7 @@ void auth_invite_send(sockaddr_in *sin_dest) {
 
 }
 
+/* Leaving node_role in place right now. We can perhaps take it out later. */
 /* Send PC Request */
 void auth_request_send(sockaddr_in *sin_dest) {
 
@@ -1225,6 +1305,9 @@ void auth_request_send(sockaddr_in *sin_dest) {
 	header->id = my_id;
 	header->type = AUTH_REQ;
 	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = 0;
+	header->num_nodes_over = 0;
 
 	buf = malloc(MAXBUFLEN);
 	memset(buf, 0, sizeof(buf));
@@ -1259,6 +1342,10 @@ void auth_issue_send(sockaddr_in *sin_dest) {
 	am_header->id = my_id;
 	am_header->type = AUTH_ISSUE;
 	am_header->node_role = my_role; //This would send to the recipient the role of the source node. This might break things.
+	am_header->found_sp_id = 0;
+	am_header->found_sp_addr = 0;
+	am_header->num_nodes_over = 0;
+
 
 	buf = malloc(MAXBUFLEN);
 	memset(buf, 0, sizeof(buf));
@@ -1326,6 +1413,10 @@ void neigh_pc_send(sockaddr_in *sin_dest) {
 	am_header = (am_packet *) malloc(sizeof(am_packet));
 	am_header->id = my_id;
 	am_header->type = NEIGH_PC;
+	am_header->node_role = my_role;
+	am_header->found_sp_id = 0;
+	am_header->found_sp_addr = 0;
+	am_header->num_nodes_over = 0;
 
 	buf = malloc(MAXBUFLEN);
 	memset(buf, 0, sizeof(buf));
@@ -1414,7 +1505,13 @@ char *all_sign_send(EVP_PKEY *pkey, EVP_CIPHER_CTX *master, int *key_count) {
 	header->id = my_id;
 	header->type = SIGNATURE; //This specifies the type of data being sent. This goes into the header.
 	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = 0;
+	header->num_nodes_over = 0;
 
+
+	//Adding the new header entries may break something since we're increasing the size of the packet.
+	//The existing code should already scale for the increased size though.
 	auth_header = malloc(sizeof(routing_auth_packet));
 	auth_header->iv_len = strlen(b64_iv);
 	auth_header->rand_len = strlen(b64_rand);
@@ -1604,6 +1701,9 @@ void neigh_sign_req_send(uint32_t addr) {
 	am_header->id = my_id;
 	am_header->type = NEIGH_SIG_REQ;
 	am_header->node_role = my_role;
+	am_header->found_sp_id = 0;
+	am_header->found_sp_addr = 0;
+	am_header->num_nodes_over = 0;
 
 	sockaddr_in dst;
 	dst.sin_addr.s_addr = addr;
@@ -1618,7 +1718,7 @@ void neigh_sign_req_send(uint32_t addr) {
 
 
 /* Extract AM Data Type From Received AM Packet */
-am_type am_header_extract(char *buf, char **ptr, int *id, role_type *role_of_rcvd_node) {
+am_type am_header_extract(char *buf, char **ptr, int *id, role_type *role_of_rcvd_node, uint16_t *rcvd_sp_id, uint32_t *rcvd_sp_addr, uint16_t *rcvd_num_nodes_over) {
 
 	am_packet *header;
 	header = (am_packet *)buf;
@@ -1629,7 +1729,9 @@ am_type am_header_extract(char *buf, char **ptr, int *id, role_type *role_of_rcv
 	*id = header->id;
 
 	*role_of_rcvd_node = header->node_role; //This returns back the received node role. This is new from (7/9)
-
+	*rcvd_sp_id = header->found_sp_id; //Returns back found SP Node ID (if applicable)
+	*rcvd_sp_addr = header->found_sp_addr; //Returns back found SP Node IP Address (if applicable)
+	*rcvd_num_nodes_over = header->num_nodes_over; //Returns the number of nodes over the SP Node is (if applicable)
 	return header->type; //This returns the header, which is used above in a SWITCH to determine how to handle the incoming data.
 
 }
