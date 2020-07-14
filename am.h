@@ -173,9 +173,9 @@ typedef enum am_state_en {
 	WAIT_FOR_NEIGH_PC,		//8
 	WAIT_FOR_NEIGH_SIG_ACK,	//9 - special for SP waiting for sign as "ACK" after ISSUE
 	WAIT_FOR_REQ_SIG,
-	LOOKING_FOR_SP			//This is the state of the node that sends out the first REQ to neighbors to find the SP. The node holding this status will become the SP if no SP can be found.
-	//FORWARDED_SP_REQ_TO_NEIGH, //This status is for nodes that have already forwarded SP Search Requests. Prevents multiple connected neighbors to forward to this node.
-	//FORWARDED_SP_RESP_TO_NEIGH //This status is for nodes that have already forwarded FOUND SP responses to neighbors. This is the reply status to the search status above.
+	LOOKING_FOR_SP,			//This is the state of the node that sends out the first REQ to neighbors to find the SP. The node holding this status will become the SP if no SP can be found.
+	ON_HOLD_FOR_SP			//State of node that is waiting for the network to find an SP. Keeps the network from adding new nodes in the meantime.
+	
 } am_state;
 
 //This enum corresponds to the process nodes do to determine if they need to become SPs since an SP in their network is missing.
@@ -193,6 +193,12 @@ typedef enum sending_back_sp_en {
 	HAVE_SENT_BACK			//1
 } sp_sendback_state;
 
+//This enum corresponds to the process of learning which node should be the SP candidate.
+typedef enum sp_candidate_en {
+	NOT_ASKED,	//0
+	BEEN_ASKED	//1
+} sp_candidate_state;
+
 typedef enum am_type_en{
 	NO_AM_DATA,
 	SIGNATURE,
@@ -207,7 +213,8 @@ typedef enum am_type_en{
 	NEIGH_PC_REQ,
 	NEIGH_SIG_REQ,
 	SP_LOOK_REQ,
-	SP_FOUND_REPLY
+	SP_FOUND_REPLY,
+	SP_CANDIDATE_SEARCH
 } am_type;
 
 typedef enum role_type_en{
@@ -365,6 +372,8 @@ void secure_usage();
 extern role_type my_role, req_role;
 extern am_state my_state;
 extern sp_search_state sp_search_status;
+extern sp_sendback_state sp_sendback_status;
+extern sp_candidate_state sp_candidate_status;
 extern pthread_t am_main_thread;
 extern uint32_t new_neighbor;
 extern uint32_t trusted_neighbors[100];

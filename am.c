@@ -98,6 +98,8 @@ void tool_dump_memory(unsigned char* data, size_t len) {
 role_type my_role, req_role;
 am_state my_state;
 sp_search_state sp_search_status;
+sp_sendback_state sp_sendback_status;
+sp_candidate_state sp_candidate_status;
 pthread_t am_main_thread;
 uint32_t new_neighbor, prev_neighbor;
 //uint32_t trusted_neighbors[100];
@@ -128,6 +130,8 @@ time_t last_send_time;
 uint16_t foundSPID;
 uint32_t foundSPAddr;
 uint16_t numNodesOver = 0;
+
+time_t localNodeTimestamp;
 
 /* Variables used by AM in case of a reboot. A reboot requires the parameters from BATMAN.c that are provided in am_thread_init. */
 //These might be unnecessary and covered above in previous global variable declarations.
@@ -270,6 +274,9 @@ void *am_main() {
 	dst = NULL;
 
 	sp_search_status = HAVE_NOT_BEEN_ASKED; //Initially sets that a node has not been asked about an SP.
+	sp_sendback_status = HAVE_NOT_SENT_BACK;
+	sp_candidate_status = NOT_ASKED;
+	sp_reply_stat
 
 	/* Main loop for the AM thread, will only exit when Batman is terminated */
 	while(1) {
@@ -321,13 +328,61 @@ void *am_main() {
 					new_neighbor = 0;
 					break;
 
+				case SP_CANDIDATE_SEARCH:
+
+					//TO-DO: Integrate a way to allow nodes that haven't compared yet to compare, but keep those that have already compared out.
+					//This will take more than a binary process to do.
+
+					//The addr entry will be used to hold the time_t of the sending node.
+					//This case can only occur if the state of the node is set to LOOKING_FOR_SP
+
+					//First, check to see if thise node has already forfeit its candidacy
+					if (my_state != LOOKING_FOR_SP || sp_candidate_status == BEEN_ASKED)
+					{
+						printf("SP_CANDIDATE_SEARCH is only for SP Candidate Nodes! This node is not a candidate or has already been asked.\n");
+					}
+					//If this is a candidate for SP, and hasn't been asked yet, then the else code will execute.
+					else
+					{
+						long sentNodeTime = foundSPAddr; //This is the time-stamp sent by the sending node, which will be compared to our node's timestamp.
+						//localNodeTimestamp holds this node's time. sendNodeTime holds the sender's time.
+						long localNodeTime = localNodeTimestamp;
+
+						int debateResult = presidential_debate(localNodeTime, sentNodeTime);
+
+						switch (debateResult)
+						{
+							case 0:
+								printf("The sender is better candidate for an SP. Ending this node's run for SP...\n");
+								sp_candidate_status = BEEN_ASKED;
+								my_state = ON_HOLD_FOR_SP; //This status makes the node wait for the SP Search Process to end, even though they lost the candidacy.
+								//There is no need to send a reply to other nodes, because this process will happen locally on the sender as well.
+								break;
+							case 1:
+								printf("This node is a better candidate for an SP. Keeping the run alive...\n");
+								sp_candidate_status = BEEN_ASKED;
+								//State remains LOOKING_FOR_SP
+								break;
+							default:
+								printf("Error found in presidential_debate function... Improper return!\n");
+								break;
+						}
+
+						//Now, have the process begin again for other nodes in the network.
+						neighbor_nudge(SP_CANDIDATE_SEARCH);
+					}
+					break;
+
+
+
+
 				case SP_LOOK_REQ:
 					//Occurs in nodes that receive requests to look for SP nodes in their neighbor lists.
 
 					//A function will search the neighbor list and return a value that reflects whether an SP exists within the neighbor list or not.
 					//We have rcvd_id to work with, which is the unique ID of the sender. We can use this to prevent the function from sending a SP Search REQ back to it.
 					
-					int SPSearch = neighbor_sp_scour();
+					int SPSearch = neighbor_sp_scour(rcvd_id);
 
 					//This means that this node has already searched for an SP and acted.
 					//No need to double send!
@@ -336,32 +391,45 @@ void *am_main() {
 						printf("Node has already looked for an SP! Preventing double-send loop...\n");
 					}
 
+					//This means that an SP Node was found IN THIS NODE'S NEIGHBOR LIST. This means the APB process is over for the network, and we need to send it back!
+					else if (SPSearch == 0)
+					{
+						printf("An SP has been found in this neighbor list!\n");
+						sp_reply_start();
+					}
+
+					else if (SPSearch == 1)
+					{
+						printf("No SP node exists in the neighbor list, and I have no neighbors to send to!\n");
+					}
+
 					//This means that an SP was not found, but the neighbor list has nodes we can send this request to as well.
 					else if (SPSearch == 2)
 					{
 						//We can use neighbor_nudge to send this request to this node's neighbors.
+						print("No SP node exists in the neighbor list, but I have some neighbors to ask!\n");
 						numNodesOver++;
 						neighbor_nudge(SP_LOOK_REQ);
-					}
-
-					//This means that an SP Node was found IN THIS NODE'S NEIGHBOR LIST. This means the APB process is over for the network, and we need to send it back!
-					else if (SPSearch == 0)
-					{
-						sp_reply_start();
 					}
 
 					break;
 				
 				case SP_FOUND_REPLY:
 
-					if (sp_sendback_state == HAVE_SENT_BACK)
+					//First, make sure that this node hasn't been asked yet.
+					if (sp_sendback_status == HAVE_SENT_BACK)
 					{
 						//This occurs if this node has already forwarded the SP reply.
 						//No need to double send!
 						printf("Node has already forwarded SP reply! Preventing double-send loop...\n");
 					}
 
-					else if (my_state == LOOKING_FOR_SP)
+					//Next, reset the search state flag.
+					sp_search_state = HAVE_NOT_BEEN_ASKED;
+
+					//This if-statement becomes true IF THE NODE THAT RECEIVED THIS IS THE ORIGINATOR.
+					//It ends the perilous journey to look for an SP Node.
+					if (my_state == LOOKING_FOR_SP)
 					{
 						//This occurs if the node that receives this is the one that originated the request.
 						printf("An SP Node has been found in the network!\n");
@@ -373,10 +441,11 @@ void *am_main() {
 						//Now that this mystery has been solved, we can revert this node back to READY
 						my_state = READY;
 					}
+
 					else
 					{
 						//This occurs when we have not reached the originator node yet.
-						numNodesOver++; //Increments the number of nodes over.
+						//numNodesOver++; //Increments the number of nodes over.
 						neighbor_nudge_sp_reply(SP_FOUND_REPLY);
 					}
 
@@ -682,7 +751,6 @@ void *am_main() {
 
 			}
 
-			///CODE CONSTRUCTION HERE/// -- 7/13/20
 			//There are probably better ways to implement this, but we now need to check the neighbor list to see if an SP is in the list. If there is no SP in the neighbor list, then this is a problem!
 			int roleIter;
 			for (roleIter = 0; roleIter < num_trusted_neigh; roleIter++)
@@ -701,10 +769,26 @@ void *am_main() {
 				//The solution: Begin a "presidential" candidacy to find a new SP should an APB to find the SP fails.
 				
 				//The state will be set to LOOKING_FOR_SP until a reply notifies that an SP has been found.
-				//OR, an SP is never found. Perhaps through a time-out?
+				//OR, an SP is never found
 				my_state = LOOKING_FOR_SP;
+
 				//This will start the SP Search process
-				SPSearchStart = all_points_bulletin();
+				///CODE CONSTRUCTION HERE/// -- 7/13/20
+
+				//The 'Presidential' Candidacy Search will determine which node should become the new SP if needed.
+				//Completely determining by using timestamps.
+				printf("It's possible that multiple nodes in the network have flagged that an SP might be missing.\n");
+				printf("Initiating the 'Presidential' Candidacy Search.\n");
+
+				localNodeTimestamp = 0;
+				localNodeTimestamp = time(NULL);
+				
+
+
+
+				///END CODE CONSTRUCTION///
+
+				int SPSearchStart = all_points_bulletin();
 
 			}
 			else
@@ -712,8 +796,6 @@ void *am_main() {
 				printf("An SP is present in this node's neighbor list. No problem here!\n");
 			}
 			
-
-			///END CODE CONSTRUCTION///
 
 		}
 
@@ -785,6 +867,33 @@ void neighbor_nudge(am_type what_purpose)
 	//Now, change the state of the node to reflect 
 }
 
+void presidential_candidacy(time_t thisNodeTimer)
+{
+	printf("In order to prevent multiple SPs in the system, the prime SP candidate in the network will be decided.\n");
+	//First, begin the search by sending out requests to neighbor nodes.
+	neighbor_nudge(SP_CANDIDATE_SEARCH);
+}
+
+int presidential_debate(long localNodeTime, long senderNodeTime)
+{
+	if (senderNodeTime <= localNodeTime)
+	{
+		//printf("The sender is better candidate for an SP. Ending this node's run for SP...\n");
+		//sp_candidate_state = BEEN_ASKED;
+		//my_state = ON_HOLD_FOR_SP; //This status makes the node wait for the SP Search Process to end, even though they lost the candidacy.
+		//There is no need to send a reply to other nodes, because this process will happen locally on the sender as well.
+		return 0;
+	}
+	//If the local timestamp is older than the sender timestamp...
+	else
+	{
+		//sp_candidate_state = BEEN_ASKED;
+		printf("This node is a better candidate for SP than the sender! Keeping candidacy alive...\n");
+		return 1;
+	}
+	
+}
+
 void sp_reply_start()
 {
 	//foundSPID
@@ -818,7 +927,7 @@ void neighbor_nudge_sp_reply(am_type what_purpose)
 		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
 	}
 
-	sp_sendback_state = HAVE_SENT_BACK;
+	sp_sendback_status = HAVE_SENT_BACK;
 }
 
 /* Scour neighbor lists and return if an SP exists. Either return "YES, there is one", "NO, but I have neighbors to ask" or "NO, and I have no more neighbors to ask." */
@@ -837,7 +946,6 @@ int neighbor_sp_scour(int senderID)
 		//If an SP is found in the node's neighbor list, then the search process is complete.
 		if (neigh_list[neighIter]->node_role == SP)
 		{
-			printf("An SP has been found in this neighbor list!\n");
 			foundSPID = neigh_list[neighIter]->id;
 			foundSPAddr = neigh_list[neighIter]->addr;
 			return 0;
@@ -849,12 +957,10 @@ int neighbor_sp_scour(int senderID)
 	{
 		if (num_trusted_neigh == 1 && neigh_list[num_trusted_neigh-1]->id == senderID)
 		{
-			printf("No SP node exists in the neighbor list, and I have no neighbors to send to!\n");
 			return 1
 		}
 		else
 		{
-			print("No SP node exists in the neighbor list, but I have some neighbors to ask!\n");
 			return 2;
 		}
 		
@@ -952,6 +1058,7 @@ void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned
 		//Now, add the node_role
 
 		//It may be better to assign node_role by pulling this role from the AL.
+		//Since the neighbor list is a sublist of the authenticated list, this should NEVER fail.
 		for (int authIter = 0; authIter < MAX_AUTH_NODES; authIter++)
 		{
 			if (authenticated_list[authIter]->id == id)
@@ -960,11 +1067,12 @@ void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned
 				//We may need to go back and change the type for role to <<uint8_t>>
 			}
 		}
-		//If, for some reason, the neighbor node is not in the Authenticated List. This SHOULDN'T happen.
+
+		/* //If, for some reason, the neighbor node is not in the Authenticated List. This SHOULDN'T happen.
 		if (authIter == MAX_AUTH_NODES)
 		{
 			neigh_list[num_trusted_neigh]->node_role = receivedRole;
-		}
+		} */
 
 		num_trusted_neigh++;
 
