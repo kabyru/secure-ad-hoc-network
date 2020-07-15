@@ -174,8 +174,10 @@ typedef enum am_state_en {
 	WAIT_FOR_NEIGH_SIG_ACK,	//9 - special for SP waiting for sign as "ACK" after ISSUE
 	WAIT_FOR_REQ_SIG,
 	LOOKING_FOR_SP,			//This is the state of the node that sends out the first REQ to neighbors to find the SP. The node holding this status will become the SP if no SP can be found.
-	ON_HOLD_FOR_SP			//State of node that is waiting for the network to find an SP. Keeps the network from adding new nodes in the meantime.
-	
+	ON_HOLD_FOR_SP,			//State of node that is waiting for the network to find an SP. Keeps the network from adding new nodes in the meantime.
+	ON_HOLD_FOR_SP_SEARCH,
+	LOST_CANDIDATE
+
 } am_state;
 
 //This enum corresponds to the process nodes do to determine if they need to become SPs since an SP in their network is missing.
@@ -266,6 +268,11 @@ typedef struct trusted_neigh_st {
 	uint8_t 		node_role; //Added node_role here! (7/9) We may want to change this to uint8_t
 } trusted_neigh;
 
+typedef struct candidate_node_st {
+	uint16_t		id;				//Unique ID
+	uint32_t		time;			//Unique Timestamp
+} candidate_node;
+
 typedef struct am_packet_st {
 	uint16_t 	id;
 	uint8_t 	type;
@@ -348,7 +355,9 @@ void openssl_key_master_ctx(EVP_CIPHER_CTX *master);
 unsigned char *openssl_aes_encrypt(EVP_CIPHER_CTX *e, unsigned char *plaintext, int *len);
 
 void al_add(uint32_t addr, uint16_t id, role_type role, unsigned char *subject_name, EVP_PKEY *key);
-void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value);
+void received_candidates_add(uint32_t time, uint16_t id);
+int	received_candidates_remove(int pos);
+void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned char *mac_value);
 int neig_list_remove(int pos);
 
 EVP_PKEY *openssl_key_copy(EVP_PKEY *key);
@@ -382,7 +391,10 @@ extern uint16_t auth_seq_num;
 extern pthread_mutex_t auth_lock;
 extern int num_auth_nodes;
 extern int num_trusted_neigh;
+extern int num_candidate_tries;
+//extern time_t localNodeTimestamp;
 
 extern trusted_neigh *neigh_list[100];
+extern candidate_node *received_candidates[100];
 
 #endif

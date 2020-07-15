@@ -109,9 +109,11 @@ uint16_t auth_seq_num;
 
 #define MAX_AUTH_NODES 100
 #define MAX_NEIGH_NODES 100
+#define MAX_CANDIDATE_NODES 100
 trusted_node *authenticated_list[MAX_AUTH_NODES];
 trusted_neigh *neigh_list[MAX_NEIGH_NODES];
-int num_auth_nodes, num_trusted_neigh;
+candidate_node *received_candidates[MAX_CANDIDATE_NODES]; //Will be used to track nodes that have already tried for candidacy.
+int num_auth_nodes, num_trusted_neigh, num_candidate_tries;
 
 pthread_mutex_t auth_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -247,6 +249,7 @@ void *am_main() {
 
 	num_trusted_neigh = 0;
 	num_auth_nodes = 0;
+	num_candidate_tries = 0;
 	subject_name = malloc(FULL_SUB_NM_SZ);
 	memset(subject_name, 0, FULL_SUB_NM_SZ);
 	if(my_role == SP) {
@@ -336,45 +339,55 @@ void *am_main() {
 					//The addr entry will be used to hold the time_t of the sending node.
 					//This case can only occur if the state of the node is set to LOOKING_FOR_SP
 
-					//First, check to see if thise node has already forfeit its candidacy
-					if (my_state != LOOKING_FOR_SP || sp_candidate_status == BEEN_ASKED)
+					//First, check to see if this node has already forfeit its candidacy
+					if (my_state != LOOKING_FOR_SP)
 					{
 						printf("SP_CANDIDATE_SEARCH is only for SP Candidate Nodes! This node is not a candidate or has already been asked.\n");
 					}
-					//If this is a candidate for SP, and hasn't been asked yet, then the else code will execute.
-					else
+					
+					int searchedBefore = 0;
+					//Second, confirm that we haven't compared this node already.
+					for (int rcIter = 0; icIter < num_candidate_tries; icIter++)
 					{
-						long sentNodeTime = foundSPAddr; //This is the time-stamp sent by the sending node, which will be compared to our node's timestamp.
+						if (received_candidates[rcIter]->id == rcvd_id)
+						{
+							printf("This candidate node has already been evaluated! Exiting SP_CANDIDATE_SEARCH ops...\n");
+							searchedBefore = 1;
+						}
+					}
+					
+					long sentNodeTime = foundSPAddr; //This is the time-stamp sent by the sending node, which will be compared to our node's timestamp.
 						//localNodeTimestamp holds this node's time. sendNodeTime holds the sender's time.
-						long localNodeTime = localNodeTimestamp;
+					long localNodeTime = localNodeTimestamp;
 
+
+					if (searchedBefore == 0)
+					{
 						int debateResult = presidential_debate(localNodeTime, sentNodeTime);
 
 						switch (debateResult)
 						{
 							case 0:
 								printf("The sender is better candidate for an SP. Ending this node's run for SP...\n");
-								sp_candidate_status = BEEN_ASKED;
-								my_state = ON_HOLD_FOR_SP; //This status makes the node wait for the SP Search Process to end, even though they lost the candidacy.
+								//sp_candidate_status = BEEN_ASKED;
+								my_state = LOST_CANDIDATE; //This status makes the node wait for the SP Search Process to end, even though they lost the candidacy.
+								received_candidates_add(foundSPAddr, rcvd_id);
 								//There is no need to send a reply to other nodes, because this process will happen locally on the sender as well.
 								break;
 							case 1:
 								printf("This node is a better candidate for an SP. Keeping the run alive...\n");
-								sp_candidate_status = BEEN_ASKED;
+								//sp_candidate_status = BEEN_ASKED;
 								//State remains LOOKING_FOR_SP
+								received_candidates_add(foundSPAddr, rcvd_id);
 								break;
 							default:
 								printf("Error found in presidential_debate function... Improper return!\n");
 								break;
 						}
-
 						//Now, have the process begin again for other nodes in the network.
 						neighbor_nudge(SP_CANDIDATE_SEARCH);
 					}
 					break;
-
-
-
 
 				case SP_LOOK_REQ:
 					//Occurs in nodes that receive requests to look for SP nodes in their neighbor lists.
@@ -394,18 +407,21 @@ void *am_main() {
 					//This means that an SP Node was found IN THIS NODE'S NEIGHBOR LIST. This means the APB process is over for the network, and we need to send it back!
 					else if (SPSearch == 0)
 					{
+						my_state = ON_HOLD_FOR_SP_SEARCH;
 						printf("An SP has been found in this neighbor list!\n");
 						sp_reply_start();
 					}
 
 					else if (SPSearch == 1)
 					{
+						//my_state = ON_HOLD_FOR_SP;
 						printf("No SP node exists in the neighbor list, and I have no neighbors to send to!\n");
 					}
 
 					//This means that an SP was not found, but the neighbor list has nodes we can send this request to as well.
 					else if (SPSearch == 2)
 					{
+						my_state = ON_HOLD_FOR_SP_SEARCH;
 						//We can use neighbor_nudge to send this request to this node's neighbors.
 						print("No SP node exists in the neighbor list, but I have some neighbors to ask!\n");
 						numNodesOver++;
@@ -447,6 +463,7 @@ void *am_main() {
 						//This occurs when we have not reached the originator node yet.
 						//numNodesOver++; //Increments the number of nodes over.
 						neighbor_nudge_sp_reply(SP_FOUND_REPLY);
+						my_state = READY;
 					}
 
 					break;
@@ -751,6 +768,7 @@ void *am_main() {
 
 			}
 
+			if (my_state != ON_HOLD_FOR_SP)
 			//There are probably better ways to implement this, but we now need to check the neighbor list to see if an SP is in the list. If there is no SP in the neighbor list, then this is a problem!
 			int roleIter;
 			for (roleIter = 0; roleIter < num_trusted_neigh; roleIter++)
@@ -770,7 +788,7 @@ void *am_main() {
 				
 				//The state will be set to LOOKING_FOR_SP until a reply notifies that an SP has been found.
 				//OR, an SP is never found
-				my_state = LOOKING_FOR_SP;
+				my_state = ON_HOLD_FOR_SP;
 
 				//This will start the SP Search process
 				///CODE CONSTRUCTION HERE/// -- 7/13/20
@@ -782,13 +800,7 @@ void *am_main() {
 
 				localNodeTimestamp = 0;
 				localNodeTimestamp = time(NULL);
-				
-
-
-
-				///END CODE CONSTRUCTION///
-
-				int SPSearchStart = all_points_bulletin();
+				presidential_candidacy();
 
 			}
 			else
@@ -800,12 +812,37 @@ void *am_main() {
 		}
 
 		/* Check state, if state not READY for a while (3 seconds), go to READY */
+		/* We are going to repurpose this function so that if we're looking for an SP, and a certain amount of time*/
+		/* has passed, we assume that this node is the prime candidate for SP. They win the election! */
+		/* Let's say... 10 seconds as an initial guess. */
+		
+		int timerThreshold = 10; //Controls how long (seconds) we should wait before acting.
+
 		if(my_state != READY) {
 			if(state_timer==0)
 				state_timer = time(NULL);
 
-			if(test_timer - 3 > state_timer) {
-				my_state = READY;
+			if(test_timer - timerThreshold > state_timer) {
+
+				if (my_state == ON_HOLD_FOR_SP)
+				{
+					printf("%d seconds have passed, and this node is still a candidate. This node is declared the winner!\n", timerThreshold);
+					//And now, to trigger the all_points_bulletin.
+					my_state = LOOKING_FOR_SP;
+					int SPSearchStart = all_points_bulletin();
+				}
+				if (my_state == LOOKING_FOR_SP)
+				{
+					printf("%d seconds have passed, and no SP has been found yet. This node will become the new SP!\n", timerThreshold);
+					//At this point, because no SP was found in the network, the winning candidate node will become one.
+					//This will require the reboot of *every node in the system* to reset certificates.
+					//Idea: Use neighbor_nudge to reset each node.
+					kill_switch();
+				}
+
+
+
+				//my_state = READY;
 				state_timer = 0;
 			}
 
@@ -867,7 +904,14 @@ void neighbor_nudge(am_type what_purpose)
 	//Now, change the state of the node to reflect 
 }
 
-void presidential_candidacy(time_t thisNodeTimer)
+void kill_switch()
+{
+	//This function occurs when the SP candidate decides to become the SP Node. This function will command the other
+	//nodes in the network to reboot so that they may acquire proxy certificates from the new SP.
+	
+}
+
+void presidential_candidacy()
 {
 	printf("In order to prevent multiple SPs in the system, the prime SP candidate in the network will be decided.\n");
 	//First, begin the search by sending out requests to neighbor nodes.
@@ -1008,6 +1052,40 @@ void al_add(uint32_t addr, uint16_t id, role_type role, unsigned char *subject_n
 
 	num_auth_nodes++;
 
+}
+
+void received_candidates_add(uint32_t time, uint16_t id)
+{
+	//num_candidate_tries counts how many entries in this list.
+
+	received_candidates[num_candidate_tries] = malloc(sizeof(candidate_node));
+	received_candidates[num_candidate_tries]->time = time;
+	received_candidates[num_candidate_tries]->id = id;
+
+}
+
+int received_candidates_remove(int pos)
+{
+	//First, check whether this node exists at all...
+	if (received_candidates[pos] == NULL)
+	{
+		printf("Node does not exist in NL, cannot remove!\n");
+		return 0;
+	}
+
+	//Free from memory
+	free(received_candidates[pos]);
+
+	//Rearrange received_candidates list to avoid open spots.
+	int i;
+	for (i = pos + 1; i < num_candidate_tries; i++)
+	{
+		received_candidates[i-1] = received_candidates[i];
+	}
+	//Reflect that one candidate has been removed.
+	num_candidate_tries--;
+
+	return 1;
 }
 
 /* Add node to trusted neighbor list */ //MAC contains the keystream data.

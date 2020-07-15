@@ -122,3 +122,8 @@ TO DECIDE BETWEEN WHICH NODE WILL BECOME THE SP IF NEEDED:
 neighbors.
 -If the sent packet has an earlier timestamp, the recipient node yields and stops ops.
 -Otherwise, it still remains the candidate for becoming an SP.
+
+NOTES from 7/14:
+-Need to implement way in main loop to confirm that they are the SP candidate.
+-Also, will need to begin code for how to reboot node.
+-am.h will need to be updated to reflect all the new functions added.
