@@ -10,6 +10,11 @@
  * Project    : Implementing a Secure Ad Hoc Network
  * Institution: NTNU (Norwegian University of Science & Technology), ITEM (Institute of Telematics)
  *
+ * Forked by  : Kaleb Byrum
+ * Modified on: 15 Jul. 2020
+ * Email      : kabyru01@louisville.edu
+ * Project    : CSE 693: Secure Ad Hoc Network
+ * Institution: University of Louisville, KY, USA
  */
 
 #ifndef AM_H

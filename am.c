@@ -10,11 +10,11 @@
  * Project    : Implementing a Secure Ad Hoc Network
  * Institution: NTNU (Norwegian University of Science & Technology), ITEM (Institute of Telematics)
  *
- * Forked by : Kaleb Byrum
- * Modified on : 30 Jun. 2020
- * Email : kabyru01@louisville.edu
- * Project : CSE 693: Secure Ad Hoc Network
- * Institution : University of Louisville, KY, USA
+ * Forked by  : Kaleb Byrum
+ * Modified on: 15 Jul. 2020
+ * Email      : kabyru01@louisville.edu
+ * Project    : CSE 693: Secure Ad Hoc Network
+ * Institution: University of Louisville, KY, USA
  */
 
 // Usage function for my AM extension */
@@ -502,7 +502,7 @@ void *am_main() {
 						//This occurs when we have not reached the originator node yet.
 						//numNodesOver++; //Increments the number of nodes over.
 						neighbor_nudge_sp_reply(SP_FOUND_REPLY);
-						my_state = READY;
+						my_state = ON_HOLD_FOR_SP_SEARCH;
 					}
 
 					break;
@@ -811,7 +811,7 @@ void *am_main() {
 			}
 
 
-			if (my_state == READY)
+			if (my_state == READY) //Occurs when we're not looking for an SP or rebooting...
 			//There are probably better ways to implement this, but we now need to check the neighbor list to see if an SP is in the list. If there is no SP in the neighbor list, then this is a problem!
 			int roleIter;
 			for (roleIter = 0; roleIter < num_trusted_neigh; roleIter++)
@@ -824,25 +824,33 @@ void *am_main() {
 			//Now, check if the previous for-loop failed to find any SPs in the neighbor list.
 			if (roleIter == num_trusted_neigh)
 			{
-				printf("No SP is present in the neighbor list!! No new nodes can be added to the neighbor's immediate network!\n");
-				//Now the fun begins! We now need to begin the SP Search process. This will happen on every node that cannot find an SP in their neighbor network.
-				//However, this poses a problem. This might occur on other nodes in the network!
-				//The solution: Begin a "presidential" candidacy to find a new SP should an APB to find the SP fails.
+				if (num_trusted_neigh == 0)
+				{
+					printf("There are no neighbors in the list right now! SP Search will not begin until neighbors are found.");
+				}
+				else
+				{
+					printf("No SP is present in the neighbor list!! No new nodes can be added to the neighbor's immediate network!\n");
+					//Now the fun begins! We now need to begin the SP Search process. This will happen on every node that cannot find an SP in their neighbor network.
+					//However, this poses a problem. This might occur on other nodes in the network!
+					//The solution: Begin a "presidential" candidacy to find a new SP should an APB to find the SP fails.
+					
+					//The state will be set to ON_HOLD_FOR_SP until a reply notifies that an SP has been found.
+					//OR, until an SP is never found
+					my_state = ON_HOLD_FOR_SP;
+
+					//This will start the SP Search process
+
+					//The 'Presidential' Candidacy Search will determine which node should become the new SP if needed.
+					//Completely determining by using timestamps.
+					printf("It's possible that multiple nodes in the network have flagged that an SP might be missing.\n");
+					printf("Initiating the 'Presidential' Candidacy Search.\n");
+
+					localNodeTimestamp = 0;
+					localNodeTimestamp = time(NULL);
+					presidential_candidacy();
+				}
 				
-				//The state will be set to ON_HOLD_FOR_SP until a reply notifies that an SP has been found.
-				//OR, until an SP is never found
-				my_state = ON_HOLD_FOR_SP;
-
-				//This will start the SP Search process
-
-				//The 'Presidential' Candidacy Search will determine which node should become the new SP if needed.
-				//Completely determining by using timestamps.
-				printf("It's possible that multiple nodes in the network have flagged that an SP might be missing.\n");
-				printf("Initiating the 'Presidential' Candidacy Search.\n");
-
-				localNodeTimestamp = 0;
-				localNodeTimestamp = time(NULL);
-				presidential_candidacy();
 
 			}
 			else
@@ -853,7 +861,7 @@ void *am_main() {
 
 		}
 
-		/* Check state, if state not READY for a while (3 seconds), go to READY */
+		/* Original idea: Check state, if state not READY for a while, go to READY */
 		/* We are going to repurpose this function so that if we're looking for an SP, and a certain amount of time*/
 		/* has passed, we assume that this node is the prime candidate for SP. They win the election! */
 		/* Let's say... 10 seconds as an initial guess. */
