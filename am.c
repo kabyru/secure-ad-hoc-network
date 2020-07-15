@@ -177,6 +177,9 @@ void am_thread_kill() {
 		free(neigh_list[i]->mac);
 		free(neigh_list[i]);
 	}
+	for (i=0; i<num_candidate_tries; i++) {
+		free(received_candidates[i]);
+	}
 	free(interface);
 	free(auth_value);
 	socks_am_destroy(&am_send_socket, &am_recv_socket);
@@ -185,6 +188,20 @@ void am_thread_kill() {
 
 /* TO-DO: A reboot function will need to be implemented. */
 //void am_thread_reboot()
+
+void *am_reboot()
+{
+	//First, save copies of the original parameters of the node.
+	sockaddr_in savedAddr = my_addr;
+	sockaddr_in savedBroad = broadcast_addr;
+	char *savedInterface = (char *) malloc(strlen(interface)+1);
+	memset(savedInterface, 0, strlen(interface)+1);
+	strncpy(savedInterface, interface, strlen(interface));
+
+	//Next, kill the current node state, and promptly restart it.
+	am_thread_kill();
+	am_thread_init(savedInterface, savedAddr, savedBroad);
+}
 
 
 /* AM main thread */
@@ -279,7 +296,9 @@ void *am_main() {
 	sp_search_status = HAVE_NOT_BEEN_ASKED; //Initially sets that a node has not been asked about an SP.
 	sp_sendback_status = HAVE_NOT_SENT_BACK;
 	sp_candidate_status = NOT_ASKED;
-	sp_reply_stat
+	
+	//Initializes the state of the node as READY.
+	my_state = READY;
 
 	/* Main loop for the AM thread, will only exit when Batman is terminated */
 	while(1) {
@@ -331,10 +350,28 @@ void *am_main() {
 					new_neighbor = 0;
 					break;
 
-				case SP_CANDIDATE_SEARCH:
+				case REBOOT:
+					//This case is when a node receives a kill switch command, which is part of the SP Reassignment Process.
+					if (my_state == READY || my_role == SP)
+					{
+						//If the state is ready, then there is no need to reboot again. The state is set to READY when a reboot happens.
+						printf("Received reboot is not necessary. This node has already reboot.\n");
+					}
+					else
+					{
+						//Now, the code within here will execute when a reboot needs to occur.
+						my_role = AUTHENTICATED;
 
-					//TO-DO: Integrate a way to allow nodes that haven't compared yet to compare, but keep those that have already compared out.
-					//This will take more than a binary process to do.
+						//Send the command to other nodes before ending this thread...
+						neighbor_nudge_forward(REBOOT, rcvd_id);
+
+						//Finally, reboot the node.
+						pthread_create(&reboot_thread, NULL, am_reboot, NULL);
+					}
+					
+					break;
+
+				case SP_CANDIDATE_SEARCH:
 
 					//The addr entry will be used to hold the time_t of the sending node.
 					//This case can only occur if the state of the node is set to LOOKING_FOR_SP
@@ -343,6 +380,8 @@ void *am_main() {
 					if (my_state != LOOKING_FOR_SP)
 					{
 						printf("SP_CANDIDATE_SEARCH is only for SP Candidate Nodes! This node is not a candidate or has already been asked.\n");
+						//Break out of case early, since, there's nothing else to be done here.
+						break;
 					}
 					
 					int searchedBefore = 0;
@@ -385,7 +424,7 @@ void *am_main() {
 								break;
 						}
 						//Now, have the process begin again for other nodes in the network.
-						neighbor_nudge(SP_CANDIDATE_SEARCH);
+						neighbor_nudge_forward(SP_CANDIDATE_SEARCH, rcvd_id); //Use neighbor_nudge_forward here to slim down unwanted traffic.
 					}
 					break;
 
@@ -755,20 +794,24 @@ void *am_main() {
 
 		/* Check whether some neighbors should be purged */
 		{
-			int i;
-			for(i=0;i<num_trusted_neigh;i++) {
+			if (my_state == READY) //This may not be necessary. Keeps nodes from being removed during the SP Search process.
+			{
+				int i;
+				for(i=0;i<num_trusted_neigh;i++) {
 
-				if(test_timer - 130 > neigh_list[i]->last_rcvd_time){
-					printf("Not received new keystream from #'%d' in 130 seconds, removing from neighbor list!\n", neigh_list[i]->id);
-					neig_list_remove(i);
+					if(test_timer - 130 > neigh_list[i]->last_rcvd_time){
+						printf("Not received new keystream from #'%d' in 130 seconds, removing from neighbor list!\n", neigh_list[i]->id);
+						neig_list_remove(i);
 
-					/* If found, list is changing, so wait till next run before removing more */
-					break;
+						/* If found, list is changing, so wait till next run before removing more */
+						break;
+					}
+
 				}
-
 			}
 
-			if (my_state != ON_HOLD_FOR_SP)
+
+			if (my_state == READY)
 			//There are probably better ways to implement this, but we now need to check the neighbor list to see if an SP is in the list. If there is no SP in the neighbor list, then this is a problem!
 			int roleIter;
 			for (roleIter = 0; roleIter < num_trusted_neigh; roleIter++)
@@ -778,7 +821,7 @@ void *am_main() {
 					break;
 				}
 			}
-			//Now, check if the previous for-loop failed to find any SPs in the neighbor list. Looking at code from Line 716...
+			//Now, check if the previous for-loop failed to find any SPs in the neighbor list.
 			if (roleIter == num_trusted_neigh)
 			{
 				printf("No SP is present in the neighbor list!! No new nodes can be added to the neighbor's immediate network!\n");
@@ -786,12 +829,11 @@ void *am_main() {
 				//However, this poses a problem. This might occur on other nodes in the network!
 				//The solution: Begin a "presidential" candidacy to find a new SP should an APB to find the SP fails.
 				
-				//The state will be set to LOOKING_FOR_SP until a reply notifies that an SP has been found.
-				//OR, an SP is never found
+				//The state will be set to ON_HOLD_FOR_SP until a reply notifies that an SP has been found.
+				//OR, until an SP is never found
 				my_state = ON_HOLD_FOR_SP;
 
 				//This will start the SP Search process
-				///CODE CONSTRUCTION HERE/// -- 7/13/20
 
 				//The 'Presidential' Candidacy Search will determine which node should become the new SP if needed.
 				//Completely determining by using timestamps.
@@ -898,24 +940,89 @@ void neighbor_nudge(am_type what_purpose)
 		dst.sin_port = htons(AM_PORT);
 
 		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
-		sp_search_state = HAVE_BEEN_ASKED;
 	}
 
 	//Now, change the state of the node to reflect 
+	sp_search_state = HAVE_BEEN_ASKED;
+	free(header);
+}
+
+//This functions the same ways as neighbor_nudge, but does NOT send a reply back to the sender.
+void neighbor_nudge_forward(am_type what_purpose, uint16_t senderID)
+{
+	am_packet *header;
+
+	header = (am_packet *) malloc(sizeof(am_packet)); //Malloc call. Gives memory to create am_packet.
+	header->id = my_id;
+	header->type = what_purpose; //New type of send within enum am_type
+	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = 0;
+	header->num_nodes_over = numNodesOver; //Will increment with each send to a new node.
+
+	sockaddr_in dst;
+	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
+	{
+		if (neigh_list[neighIter]->id == senderID)
+		{
+			printf("NNForward does not send a reply back to the sender!\n");
+			continue;
+		}
+		else
+		{
+			dst.sin_addr.s_addr = neigh_list[neighIter]->addr; //Pulls the IP Address of the neighbor.
+			dst.sin_family = AF_INET;
+			dst.sin_port = htons(AM_PORT);
+
+			sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));			
+		}
+	}
+	sp_search_state = HAVE_BEEN_ASKED;
+	free(header);
 }
 
 void kill_switch()
 {
 	//This function occurs when the SP candidate decides to become the SP Node. This function will command the other
 	//nodes in the network to reboot so that they may acquire proxy certificates from the new SP.
-	
+	neighbor_nudge_kill_switch(REBOOT);
+
+	//Now that each neighbor has been notified of the change, now we need to convert the candidate into an SP
+	my_role = SP;
+	pthread_create(&reboot_thread, NULL, am_reboot, NULL);
+
+}
+
+void neighbor_nudge_kill_switch(am_type what_purpose)
+{
+	am_packet *header;
+
+	header = (am_packet *) malloc(sizeof(am_packet)); //Malloc call. Gives memory to create an AM packet.
+	header->id = my_id;
+	header->type = what_purpose;
+	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = 0;
+	header->num_nodes_over = numNodesOver;
+
+	sockaddr_in dst;
+	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
+	{
+		dst.sin_addr.s_addr = neigh_list[neighIter]->addr;
+		dst.sin_family = AF_INET;
+		dst.sin_port = htons(AM_PORT);
+
+		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
+	}
+
+	free(header);
 }
 
 void presidential_candidacy()
 {
 	printf("In order to prevent multiple SPs in the system, the prime SP candidate in the network will be decided.\n");
 	//First, begin the search by sending out requests to neighbor nodes.
-	neighbor_nudge(SP_CANDIDATE_SEARCH);
+	neighbor_nudge(SP_CANDIDATE_SEARCH); //Update: In current form, you CANNOT use neighbor_nudge_forward since presidential_candidacy is NOT directly triggered by a received packet.
 }
 
 int presidential_debate(long localNodeTime, long senderNodeTime)
@@ -972,6 +1079,7 @@ void neighbor_nudge_sp_reply(am_type what_purpose)
 	}
 
 	sp_sendback_status = HAVE_SENT_BACK;
+	free(header);
 }
 
 /* Scour neighbor lists and return if an SP exists. Either return "YES, there is one", "NO, but I have neighbors to ask" or "NO, and I have no more neighbors to ask." */

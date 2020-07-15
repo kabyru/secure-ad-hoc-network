@@ -127,3 +127,7 @@ NOTES from 7/14:
 -Need to implement way in main loop to confirm that they are the SP candidate.
 -Also, will need to begin code for how to reboot node.
 -am.h will need to be updated to reflect all the new functions added.
+
+NOTES from 7/15:
+-Main loop (after reading input data) starts on Line 710
+-Kill Switch is implemented. Need to walk through written code and make sure it logically makes sense.

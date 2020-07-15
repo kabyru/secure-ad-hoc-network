@@ -216,7 +216,8 @@ typedef enum am_type_en{
 	NEIGH_SIG_REQ,
 	SP_LOOK_REQ,
 	SP_FOUND_REPLY,
-	SP_CANDIDATE_SEARCH
+	SP_CANDIDATE_SEARCH,
+	REBOOT
 } am_type;
 
 typedef enum role_type_en{
