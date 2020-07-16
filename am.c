@@ -377,10 +377,11 @@ void *am_main() {
 					//This case can only occur if the state of the node is set to LOOKING_FOR_SP
 
 					//First, check to see if this node has already forfeit its candidacy
-					if (my_state != LOOKING_FOR_SP)
+					if (my_state != ON_HOLD_FOR_SP)
 					{
 						printf("SP_CANDIDATE_SEARCH is only for SP Candidate Nodes! This node is not a candidate or has already been asked.\n");
 						//Break out of case early, since, there's nothing else to be done here.
+						my_state = ON_HOLD_FOR_SP_SEARCH;
 						break;
 					}
 					
@@ -394,14 +395,14 @@ void *am_main() {
 							searchedBefore = 1;
 						}
 					}
-					
-					long sentNodeTime = foundSPAddr; //This is the time-stamp sent by the sending node, which will be compared to our node's timestamp.
-						//localNodeTimestamp holds this node's time. sendNodeTime holds the sender's time.
-					long localNodeTime = localNodeTimestamp;
-
 
 					if (searchedBefore == 0)
 					{
+
+						long sentNodeTime = foundSPAddr; //This is the time-stamp sent by the sending node, which will be compared to our node's timestamp.
+							//localNodeTimestamp holds this node's time. sendNodeTime holds the sender's time.
+						long localNodeTime = localNodeTimestamp;
+
 						int debateResult = presidential_debate(localNodeTime, sentNodeTime);
 
 						switch (debateResult)
@@ -409,7 +410,7 @@ void *am_main() {
 							case 0:
 								printf("The sender is better candidate for an SP. Ending this node's run for SP...\n");
 								//sp_candidate_status = BEEN_ASKED;
-								my_state = LOST_CANDIDATE; //This status makes the node wait for the SP Search Process to end, even though they lost the candidacy.
+								my_state = ON_HOLD_FOR_SP_SEARCH; //This status makes the node wait for the SP Search Process to end, even though they lost the candidacy.
 								received_candidates_add(foundSPAddr, rcvd_id);
 								//There is no need to send a reply to other nodes, because this process will happen locally on the sender as well.
 								break;
@@ -424,7 +425,7 @@ void *am_main() {
 								break;
 						}
 						//Now, have the process begin again for other nodes in the network.
-						neighbor_nudge_forward(SP_CANDIDATE_SEARCH, rcvd_id); //Use neighbor_nudge_forward here to slim down unwanted traffic.
+						presidential_candidacy();
 					}
 					break;
 
@@ -793,25 +794,26 @@ void *am_main() {
 		}
 
 		/* Check whether some neighbors should be purged */
+
+		if (my_state == READY) //This may not be necessary. Keeps nodes from being removed during the SP Search process.
 		{
-			if (my_state == READY) //This may not be necessary. Keeps nodes from being removed during the SP Search process.
+			int i;
+			for (i = 0; i < num_trusted_neigh; i++)
 			{
-				int i;
-				for(i=0;i<num_trusted_neigh;i++) {
 
-					if(test_timer - 130 > neigh_list[i]->last_rcvd_time){
-						printf("Not received new keystream from #'%d' in 130 seconds, removing from neighbor list!\n", neigh_list[i]->id);
-						neig_list_remove(i);
+				if (test_timer - 130 > neigh_list[i]->last_rcvd_time)
+				{
+					printf("Not received new keystream from #'%d' in 130 seconds, removing from neighbor list!\n", neigh_list[i]->id);
+					neig_list_remove(i);
 
-						/* If found, list is changing, so wait till next run before removing more */
-						break;
-					}
-
+					/* If found, list is changing, so wait till next run before removing more */
+					break;
 				}
 			}
+		}
 
-
-			if (my_state == READY) //Occurs when we're not looking for an SP or rebooting...
+		if (my_state == READY) //Occurs when we're not looking for an SP or rebooting...
+		{
 			//There are probably better ways to implement this, but we now need to check the neighbor list to see if an SP is in the list. If there is no SP in the neighbor list, then this is a problem!
 			int roleIter;
 			for (roleIter = 0; roleIter < num_trusted_neigh; roleIter++)
@@ -824,17 +826,17 @@ void *am_main() {
 			//Now, check if the previous for-loop failed to find any SPs in the neighbor list.
 			if (roleIter == num_trusted_neigh)
 			{
-				if (num_trusted_neigh == 0)
+				if (num_trusted_neigh == 0) //Search will not begin until other nodes are found as neighbors.
 				{
 					printf("There are no neighbors in the list right now! SP Search will not begin until neighbors are found.");
 				}
 				else
 				{
 					printf("No SP is present in the neighbor list!! No new nodes can be added to the neighbor's immediate network!\n");
-					//Now the fun begins! We now need to begin the SP Search process. This will happen on every node that cannot find an SP in their neighbor network.
+					//We now need to begin the SP Search process. This will happen on every node that cannot find an SP in their neighbor network.
 					//However, this poses a problem. This might occur on other nodes in the network!
 					//The solution: Begin a "presidential" candidacy to find a new SP should an APB to find the SP fails.
-					
+
 					//The state will be set to ON_HOLD_FOR_SP until a reply notifies that an SP has been found.
 					//OR, until an SP is never found
 					my_state = ON_HOLD_FOR_SP;
@@ -847,18 +849,14 @@ void *am_main() {
 					printf("Initiating the 'Presidential' Candidacy Search.\n");
 
 					localNodeTimestamp = 0;
-					localNodeTimestamp = time(NULL);
+					localNodeTimestamp = time(NULL); //This is the origin of the timestamp for EVERY node in the network.
 					presidential_candidacy();
 				}
-				
-
 			}
 			else
 			{
 				printf("An SP is present in this node's neighbor list. No problem here!\n");
 			}
-			
-
 		}
 
 		/* Original idea: Check state, if state not READY for a while, go to READY */
@@ -936,7 +934,7 @@ void neighbor_nudge(am_type what_purpose)
 	header->type = what_purpose; //New type of send within enum am_type
 	header->node_role = my_role;
 	header->found_sp_id = 0;
-	header->found_sp_addr = 0;
+	header->found_sp_addr = foundSPAddr;
 	header->num_nodes_over = numNodesOver; //Will increment with each send to a new node.
 
 
@@ -950,8 +948,11 @@ void neighbor_nudge(am_type what_purpose)
 		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
 	}
 
-	//Now, change the state of the node to reflect 
-	sp_search_state = HAVE_BEEN_ASKED;
+	//Now, change the state of the node to reflect
+	if (what_purpose != SP_CANDIDATE_SEARCH)
+	{
+		sp_search_state = HAVE_BEEN_ASKED;
+	}
 	free(header);
 }
 
@@ -1030,24 +1031,20 @@ void presidential_candidacy()
 {
 	printf("In order to prevent multiple SPs in the system, the prime SP candidate in the network will be decided.\n");
 	//First, begin the search by sending out requests to neighbor nodes.
+	foundSPAddr = localNodeTimestamp; //Overloads foundSPAddr to hold the local time-stamp to fit into the AM Packet, and since the data types match.
 	neighbor_nudge(SP_CANDIDATE_SEARCH); //Update: In current form, you CANNOT use neighbor_nudge_forward since presidential_candidacy is NOT directly triggered by a received packet.
 }
 
 int presidential_debate(long localNodeTime, long senderNodeTime)
 {
+	//If true, the sender is a better candidate for SP/
 	if (senderNodeTime <= localNodeTime)
 	{
-		//printf("The sender is better candidate for an SP. Ending this node's run for SP...\n");
-		//sp_candidate_state = BEEN_ASKED;
-		//my_state = ON_HOLD_FOR_SP; //This status makes the node wait for the SP Search Process to end, even though they lost the candidacy.
-		//There is no need to send a reply to other nodes, because this process will happen locally on the sender as well.
 		return 0;
 	}
-	//If the local timestamp is older than the sender timestamp...
+	//If the local timestamp is older than the sender timestamp... then the local node is a better candidate than the sender.
 	else
 	{
-		//sp_candidate_state = BEEN_ASKED;
-		printf("This node is a better candidate for SP than the sender! Keeping candidacy alive...\n");
 		return 1;
 	}
 	
