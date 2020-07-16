@@ -455,6 +455,7 @@ void *am_main() {
 					else if (SPSearch == 1)
 					{
 						//my_state = ON_HOLD_FOR_SP;
+						my_state = ON_HOLD_FOR_SP_SEARCH;
 						printf("No SP node exists in the neighbor list, and I have no neighbors to send to!\n");
 					}
 
@@ -465,7 +466,7 @@ void *am_main() {
 						//We can use neighbor_nudge to send this request to this node's neighbors.
 						print("No SP node exists in the neighbor list, but I have some neighbors to ask!\n");
 						numNodesOver++;
-						neighbor_nudge(SP_LOOK_REQ);
+						neighbor_nudge_forward(SP_LOOK_REQ, rcvd_id); //Doesn't send a SP_LOOK_REQ to the sender.
 					}
 
 					break;
@@ -478,10 +479,11 @@ void *am_main() {
 						//This occurs if this node has already forwarded the SP reply.
 						//No need to double send!
 						printf("Node has already forwarded SP reply! Preventing double-send loop...\n");
+						break; //Break early...
 					}
 
 					//Next, reset the search state flag.
-					sp_search_state = HAVE_NOT_BEEN_ASKED;
+					//sp_search_state = HAVE_NOT_BEEN_ASKED;
 
 					//This if-statement becomes true IF THE NODE THAT RECEIVED THIS IS THE ORIGINATOR.
 					//It ends the perilous journey to look for an SP Node.
@@ -502,8 +504,11 @@ void *am_main() {
 					{
 						//This occurs when we have not reached the originator node yet.
 						//numNodesOver++; //Increments the number of nodes over.
-						neighbor_nudge_sp_reply(SP_FOUND_REPLY);
 						my_state = ON_HOLD_FOR_SP_SEARCH;
+						sp_sendback_status = HAVE_SENT_BACK;
+						numNodesOver++;
+						neighbor_nudge_sp_reply(SP_FOUND_REPLY, rcvd_id);
+						
 					}
 
 					break;
@@ -862,23 +867,23 @@ void *am_main() {
 		/* Original idea: Check state, if state not READY for a while, go to READY */
 		/* We are going to repurpose this function so that if we're looking for an SP, and a certain amount of time*/
 		/* has passed, we assume that this node is the prime candidate for SP. They win the election! */
-		/* Let's say... 10 seconds as an initial guess. */
+		/* Let's say... 15 seconds as an initial guess. */
 		
-		int timerThreshold = 10; //Controls how long (seconds) we should wait before acting.
+		int timerThreshold = 15; //Controls how long (seconds) we should wait before acting.
 
-		if(my_state != READY) {
+		if(my_state != READY || sp_search_status == HAVE_BEEN_ASKED || sp_sendback_status == HAVE_SENT_BACK || num_candidate_tries != 0) //Occurs if a search flag is triggered or the state of the node is not READY
+		{	
 			if(state_timer==0)
 				state_timer = time(NULL);
 
-			if(test_timer - timerThreshold > state_timer) {
+			if(test_timer - timerThreshold > state_timer)
+			{
+				sp_search_status = HAVE_NOT_BEEN_ASKED; //Reset search flags
+				sp_sendback_status = HAVE_NOT_SENT_BACK;
 
-				if (my_state == ON_HOLD_FOR_SP)
-				{
-					printf("%d seconds have passed, and this node is still a candidate. This node is declared the winner!\n", timerThreshold);
-					//And now, to trigger the all_points_bulletin.
-					my_state = LOOKING_FOR_SP;
-					int SPSearchStart = all_points_bulletin();
-				}
+				//Clear out received_candidates list
+				purge_received_candidates_list();
+
 				if (my_state == LOOKING_FOR_SP)
 				{
 					printf("%d seconds have passed, and no SP has been found yet. This node will become the new SP!\n", timerThreshold);
@@ -888,14 +893,26 @@ void *am_main() {
 					kill_switch();
 				}
 
+				else if (my_state == ON_HOLD_FOR_SP)
+				{
+					printf("%d seconds have passed, and this node is still a candidate. This node is declared the winner!\n", timerThreshold);
+					//And now, to trigger the all_points_bulletin.
+					my_state = LOOKING_FOR_SP;
+					all_points_bulletin();
+				}
 
+				else
+				{
+					printf("%d seconds have passed, resetting state to READY...\n", timerThreshold);
+					my_state = READY;
+				}
 
-				//my_state = READY;
 				state_timer = 0;
 			}
 
-		}else {
-
+		}
+		else
+		{
 			/* Make sure state_timer is zero if state is ready! */
 			if(state_timer!=0)
 				state_timer=0;
@@ -911,13 +928,12 @@ void *am_main() {
 
 /*Begin an "All Points Bulletin" that tries to look for an SP by searching the neighbor lists of neighbor nodes to the flagging node. */
 //The state of the node MUST be "LOOKING_FOR_SP" for this to happen.
-int all_points_bulletin()
+void all_points_bulletin()
 {
 	//Sanity Check: Make sure the node has rights to use this function. Must be looking for an SP!
 	if (my_state != LOOKING_FOR_SP)
 	{
 		print("Error! The state of the node is NOT 'LOOKING_FOR_SP'. The node does not have access to this function!\n");
-		return -1;
 	}
 
 	neighbor_nudge(SP_LOOK_REQ); //Will send to all neighbors in the network a request to look for an SP.
@@ -948,11 +964,7 @@ void neighbor_nudge(am_type what_purpose)
 		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
 	}
 
-	//Now, change the state of the node to reflect
-	if (what_purpose != SP_CANDIDATE_SEARCH)
-	{
-		sp_search_state = HAVE_BEEN_ASKED;
-	}
+
 	free(header);
 }
 
@@ -986,7 +998,7 @@ void neighbor_nudge_forward(am_type what_purpose, uint16_t senderID)
 			sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));			
 		}
 	}
-	sp_search_state = HAVE_BEEN_ASKED;
+	//sp_search_state = HAVE_BEEN_ASKED;
 	free(header);
 }
 
@@ -1057,11 +1069,11 @@ void sp_reply_start()
 	//numNodesOver
 
 	numNodesOver = 0;
-	neighbor_nudge_sp_reply(SP_FOUND_REPLY);
+	neighbor_nudge_sp_reply(SP_FOUND_REPLY, 0); //Meant for all neighbors
 }
 
 /*General Function to return SP Reply to nodes in the network. Triggers when SPSearch = 0 */
-void neighbor_nudge_sp_reply(am_type what_purpose)
+void neighbor_nudge_sp_reply(am_type what_purpose, uint16_t senderID)
 {
 	am_packet *header;
 
@@ -1076,14 +1088,21 @@ void neighbor_nudge_sp_reply(am_type what_purpose)
 	sockaddr_in dst;
 	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
 	{
-		dst.sin_addr.s_addr = neigh_list[neighIter]->addr; //Pulls the IP Address of the header
-		dst.sin_family = AF_INET;
-		dst.sin_port = htons(AM_PORT);
+		if (neigh_list[neighIter]->id == senderID)
+		{
+			printf("NNForward does not send a reply back to the sender!\n");
+			continue;
+		}
+		else
+		{
+			dst.sin_addr.s_addr = neigh_list[neighIter]->addr; //Pulls the IP Address of the neighbor.
+			dst.sin_family = AF_INET;
+			dst.sin_port = htons(AM_PORT);
 
-		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
+			sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));			
+		}
 	}
 
-	sp_sendback_status = HAVE_SENT_BACK;
 	free(header);
 }
 
@@ -1096,8 +1115,8 @@ int neighbor_sp_scour(int senderID)
 		//This prevents double searches and double sends from multiple nodes.
 		return -1
 	}
-	//sp_search_status = HAVE_BEEN_ASKED;
 	//Now, begin the searching process
+	sp_search_status = HAVE_BEEN_ASKED; //To ensure this process only happens once per node.
 	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
 	{
 		//If an SP is found in the node's neighbor list, then the search process is complete.
@@ -1112,10 +1131,12 @@ int neighbor_sp_scour(int senderID)
 	//Code inside will run if no SP node was found in the neighbor list
 	if (neighIter == num_trusted_neigh)
 	{
+		//If my neighbor list only contains the sender node...
 		if (num_trusted_neigh == 1 && neigh_list[num_trusted_neigh-1]->id == senderID)
 		{
 			return 1
 		}
+		//If I have other nodes I can send to that are not the neighbor...
 		else
 		{
 			return 2;
@@ -1199,6 +1220,15 @@ int received_candidates_remove(int pos)
 	num_candidate_tries--;
 
 	return 1;
+}
+
+void purge_received_candidates_list()
+{
+	//Destroys the whole received candidates list for the next time it is needed.
+	while (num_candidate_tries != 0)
+	{
+		received_candidates_remove(num_candidate_tries(num_candidate_tries-1));
+	}
 }
 
 /* Add node to trusted neighbor list */ //MAC contains the keystream data.
