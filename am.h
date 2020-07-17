@@ -309,6 +309,9 @@ typedef struct routing_auth_packet_st {
 /* Functions */
 void am_thread_init(char *dev, sockaddr_in addr, sockaddr_in broad);
 void am_thread_kill();
+void am_thread_kill_from_reboot();
+void am_thread_init_from_reboot();
+void *am_reboot();
 void *am_main();
 
 void socks_am_setup(int32_t *recv, int32_t *send);
@@ -340,7 +343,7 @@ void neigh_sign_send(sockaddr_in *addr, char *buf);
 void neigh_req_pc_send(sockaddr_in *neigh_addr);
 void neigh_pc_send(sockaddr_in *sin_dest);
 
-am_type am_header_extract(char *buf, char **ptr, int *id);
+am_type am_header_extract(char *buf, char **ptr, int *id, role_type *role_of_rcvd_node, uint16_t *rcvd_sp_id, uint32_t *rcvd_sp_addr, uint16_t *rcvd_num_nodes_over);
 
 int auth_request_recv(char *addr, char *ptr);
 int auth_issue_recv(char *ptr);
@@ -361,8 +364,6 @@ void openssl_key_master_ctx(EVP_CIPHER_CTX *master);
 unsigned char *openssl_aes_encrypt(EVP_CIPHER_CTX *e, unsigned char *plaintext, int *len);
 
 void al_add(uint32_t addr, uint16_t id, role_type role, unsigned char *subject_name, EVP_PKEY *key);
-void received_candidates_add(uint32_t time, uint16_t id);
-int	received_candidates_remove(int pos);
 void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned char *mac_value);
 int neig_list_remove(int pos);
 
@@ -381,6 +382,20 @@ int openssl_cert_add_ext_req(STACK_OF(X509_EXTENSION) *sk, int nid, char *value)
 void neigh_sign_req_send(uint32_t addr);
 
 void secure_usage();
+
+void all_points_bulletin();
+void neighbor_nudge(am_type what_purpose);
+void neighbor_nudge_forward(am_type what_purpose, uint16_t senderID);
+void kill_switch();
+void presidential_candidacy();
+int presidential_debate(long localNodeTime, long senderNodeTime);
+void sp_reply_start();
+void neighbor_nudge_sp_reply(am_type what_purpose, uint16_t senderID);
+int neighbor_sp_scour(int senderID);
+void received_candidates_add(uint32_t time, uint16_t id);
+int	received_candidates_remove(int pos);
+void purge_received_candidates_list();
+
 
 
 /* Necessary external variables */

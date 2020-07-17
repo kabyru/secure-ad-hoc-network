@@ -133,13 +133,19 @@ uint16_t foundSPID;
 uint32_t foundSPAddr;
 uint16_t numNodesOver = 0;
 
+uint16_t rebootMarker = 0;
+
 time_t localNodeTimestamp;
+
+sockaddr_in savedAddr;
+sockaddr_in savedBroad;
+
 
 /* Variables used by AM in case of a reboot. A reboot requires the parameters from BATMAN.c that are provided in am_thread_init. */
 //These might be unnecessary and covered above in previous global variable declarations.
 
 
-/* Usage function for my AM extension */
+/* Usage function for AM extension */
 void secure_usage() {
 	fprintf( stderr, "Secure Usage: batmand [options] -R/--role 'sp/authenticated/restricted' interface [interface interface]\n" );
 	fprintf( stderr, "       -R / --role 'sp'              start as Service Proxy / Master node\n" );
@@ -186,21 +192,48 @@ void am_thread_kill() {
 
 }
 
-/* TO-DO: A reboot function will need to be implemented. */
-//void am_thread_reboot()
+void am_thread_kill_from_reboot() {
+	pthread_kill(&am_main_thread);
+	int i;
+	for(i=0; i<num_auth_nodes; i++) {
+		free(authenticated_list[i]->name);
+		free(authenticated_list[i]->pub_key);
+		free(authenticated_list[i]);
+	}
+	for(i=0; i<num_trusted_neigh; i++) {
+		free(neigh_list[i]->mac);
+		free(neigh_list[i]);
+	}
+	for (i=0; i<num_candidate_tries; i++) {
+		free(received_candidates[i]);
+	}
+	//free(interface);
+	free(auth_value);
+	socks_am_destroy(&am_send_socket, &am_recv_socket);
+}
+
+void am_thread_init_from_reboot()
+{
+	//my_addr
+	//broadcast_addr
+	//interface
+	//All three of these are still intact from last time, because they are global variables.
+	rebootMarker = 1;
+	pthread_create(&am_main_thread, NULL, am_main, NULL);
+}
 
 void *am_reboot()
 {
 	//First, save copies of the original parameters of the node.
-	sockaddr_in savedAddr = my_addr;
-	sockaddr_in savedBroad = broadcast_addr;
-	char *savedInterface = (char *) malloc(strlen(interface)+1);
-	memset(savedInterface, 0, strlen(interface)+1);
-	strncpy(savedInterface, interface, strlen(interface));
+	//savedAddr = my_addr;
+	//savedBroad = broadcast_addr;
+	//char *savedInterface = (char *) malloc(strlen(interface)+1);
+	//memset(savedInterface, 0, strlen(interface)+1);
+	//strncpy(savedInterface, interface, strlen(interface));
 
 	//Next, kill the current node state, and promptly restart it.
-	am_thread_kill();
-	am_thread_init(savedInterface, savedAddr, savedBroad);
+	am_thread_kill_from_reboot();
+	am_thread_init_from_reboot()
 }
 
 
@@ -346,13 +379,13 @@ void *am_main() {
 						my_state = READY;
 					}
 
-					neigh_sign_recv(pkey, neigh_addr.s_addr, rcvd_id, am_payload_ptr, auth_pkt);
+					neigh_sign_recv(pkey, neigh_addr.s_addr, rcvd_id, rcvd_role, am_payload_ptr, auth_pkt);
 					new_neighbor = 0;
 					break;
 
 				case REBOOT:
 					//This case is when a node receives a kill switch command, which is part of the SP Reassignment Process.
-					if (my_state == READY || my_role == SP)
+					if (rebootMarker == 1 || my_role == SP)
 					{
 						//If the state is ready, then there is no need to reboot again. The state is set to READY when a reboot happens.
 						printf("Received reboot is not necessary. This node has already reboot.\n");
@@ -518,7 +551,7 @@ void *am_main() {
 				case NEIGH_SIGN:
 					/* Allowed in all states */
 
-					neigh_sign_recv(pkey, neigh_addr.s_addr, rcvd_id, am_payload_ptr, auth_pkt);
+					neigh_sign_recv(pkey, neigh_addr.s_addr, rcvd_id, rcvd_role, am_payload_ptr, auth_pkt);
 
 					if(my_state == WAIT_FOR_NEIGH_SIG) {
 						my_state = READY;
@@ -880,6 +913,7 @@ void *am_main() {
 			{
 				sp_search_status = HAVE_NOT_BEEN_ASKED; //Reset search flags
 				sp_sendback_status = HAVE_NOT_SENT_BACK;
+				rebootMarker = 0; //Resets rebootMarker so that it may be reset again.
 
 				//Clear out received_candidates list
 				purge_received_candidates_list();
@@ -1006,37 +1040,14 @@ void kill_switch()
 {
 	//This function occurs when the SP candidate decides to become the SP Node. This function will command the other
 	//nodes in the network to reboot so that they may acquire proxy certificates from the new SP.
-	neighbor_nudge_kill_switch(REBOOT);
+	foundSPAddr = 0;
+	foundSPID = 0;
+	neighbor_nudge(REBOOT);
 
 	//Now that each neighbor has been notified of the change, now we need to convert the candidate into an SP
 	my_role = SP;
 	pthread_create(&reboot_thread, NULL, am_reboot, NULL);
 
-}
-
-void neighbor_nudge_kill_switch(am_type what_purpose)
-{
-	am_packet *header;
-
-	header = (am_packet *) malloc(sizeof(am_packet)); //Malloc call. Gives memory to create an AM packet.
-	header->id = my_id;
-	header->type = what_purpose;
-	header->node_role = my_role;
-	header->found_sp_id = 0;
-	header->found_sp_addr = 0;
-	header->num_nodes_over = numNodesOver;
-
-	sockaddr_in dst;
-	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
-	{
-		dst.sin_addr.s_addr = neigh_list[neighIter]->addr;
-		dst.sin_family = AF_INET;
-		dst.sin_port = htons(AM_PORT);
-
-		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
-	}
-
-	free(header);
 }
 
 void presidential_candidacy()
@@ -2083,7 +2094,7 @@ int auth_invite_recv(char *ptr) {
 }
 
 /* Receive Routing Auth Packet */
-int neigh_sign_recv(EVP_PKEY *pkey, uint32_t addr, uint16_t id, char *ptr, char *auth_packet) {
+int neigh_sign_recv(EVP_PKEY *pkey, uint32_t addr, uint16_t id, role_type receivedRole, char *ptr, char *auth_packet) {
 
 	char *addr_char = malloc(16);
 	inet_ntop( AF_INET, &addr, addr_char, 16 );
@@ -2235,7 +2246,7 @@ int neigh_sign_recv(EVP_PKEY *pkey, uint32_t addr, uint16_t id, char *ptr, char 
 		}
 	}
 
-	neigh_list_add(addr, id, mac_value);
+	neigh_list_add(addr, id, receivedRole, mac_value);
 
 
 
