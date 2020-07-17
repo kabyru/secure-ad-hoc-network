@@ -853,7 +853,7 @@ void *am_main() {
 			}
 		}
 
-		if (my_state == READY) //Occurs when we're not looking for an SP or rebooting...
+		if (my_state == READY && my_role != SP) //Occurs when we're not looking for an SP or rebooting...
 		{
 			//There are probably better ways to implement this, but we now need to check the neighbor list to see if an SP is in the list. If there is no SP in the neighbor list, then this is a problem!
 			int roleIter;
@@ -907,7 +907,7 @@ void *am_main() {
 		
 		int timerThreshold = 15; //Controls how long (seconds) we should wait before acting.
 
-		if(my_state != READY || sp_search_status == HAVE_BEEN_ASKED || sp_sendback_status == HAVE_SENT_BACK || num_candidate_tries != 0) //Occurs if a search flag is triggered or the state of the node is not READY
+		if(my_state != READY || sp_search_status == HAVE_BEEN_ASKED || sp_sendback_status == HAVE_SENT_BACK || num_candidate_tries != 0 || num_trusted_neigh == 0) //Occurs if a search flag is triggered or the state of the node is not READY
 		{	
 			if(state_timer==0)
 				state_timer = time(NULL);
@@ -936,6 +936,15 @@ void *am_main() {
 					//And now, to trigger the all_points_bulletin.
 					my_state = LOOKING_FOR_SP;
 					all_points_bulletin();
+				}
+
+				else if (num_trusted_neigh == 0 && my_role == SP)
+				{
+					printf("%d seconds have passed, this SP might be lost. Rebooting node as an AUTHENTICATED.", timerThreshold);
+					my_role = AUTHENTICATED;
+					//Calls for reboot thread to start node as an AUTHENTICATED. This is done to prevent multiple SPs in a network as an SP
+					//with no neighbors implies it has lost the network at some point.
+					pthread_create(&reboot_thread, NULL, am_reboot, NULL);
 				}
 
 				else
