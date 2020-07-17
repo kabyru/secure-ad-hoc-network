@@ -101,6 +101,7 @@ sp_search_state sp_search_status;
 sp_sendback_state sp_sendback_status;
 sp_candidate_state sp_candidate_status;
 pthread_t am_main_thread;
+pthread_t reboot_thread;
 uint32_t new_neighbor, prev_neighbor;
 //uint32_t trusted_neighbors[100];
 unsigned char *auth_value;
@@ -132,6 +133,7 @@ time_t last_send_time;
 uint16_t foundSPID;
 uint32_t foundSPAddr;
 uint16_t numNodesOver = 0;
+int SPSearch;
 
 uint16_t rebootMarker = 0;
 
@@ -233,7 +235,8 @@ void *am_reboot()
 
 	//Next, kill the current node state, and promptly restart it.
 	am_thread_kill_from_reboot();
-	am_thread_init_from_reboot()
+	am_thread_init_from_reboot();
+	pthread_exit(NULL);
 }
 
 
@@ -420,9 +423,9 @@ void *am_main() {
 					
 					int searchedBefore = 0;
 					//Second, confirm that we haven't compared this node already.
-					for (int rcIter = 0; icIter < num_candidate_tries; icIter++)
+					for (int icIter = 0; icIter < num_candidate_tries; icIter++)
 					{
-						if (received_candidates[rcIter]->id == rcvd_id)
+						if (received_candidates[icIter]->id == rcvd_id)
 						{
 							printf("This candidate node has already been evaluated! Exiting SP_CANDIDATE_SEARCH ops...\n");
 							searchedBefore = 1;
@@ -468,7 +471,7 @@ void *am_main() {
 					//A function will search the neighbor list and return a value that reflects whether an SP exists within the neighbor list or not.
 					//We have rcvd_id to work with, which is the unique ID of the sender. We can use this to prevent the function from sending a SP Search REQ back to it.
 					
-					int SPSearch = neighbor_sp_scour(rcvd_id);
+					SPSearch = neighbor_sp_scour(rcvd_id);
 
 					//This means that this node has already searched for an SP and acted.
 					//No need to double send!
@@ -497,7 +500,7 @@ void *am_main() {
 					{
 						my_state = ON_HOLD_FOR_SP_SEARCH;
 						//We can use neighbor_nudge to send this request to this node's neighbors.
-						print("No SP node exists in the neighbor list, but I have some neighbors to ask!\n");
+						printf("No SP node exists in the neighbor list, but I have some neighbors to ask!\n");
 						numNodesOver++;
 						neighbor_nudge_forward(SP_LOOK_REQ, rcvd_id); //Doesn't send a SP_LOOK_REQ to the sender.
 					}
@@ -583,7 +586,7 @@ void *am_main() {
 							//Finally, shrink the AL by 1!
 							num_auth_nodes--;
 
-							print("Authentication List is no longer full-- One space has been opened.")
+							printf("Authentication List is no longer full-- One space has been opened.");
 						}
 
 					}
@@ -967,7 +970,7 @@ void all_points_bulletin()
 	//Sanity Check: Make sure the node has rights to use this function. Must be looking for an SP!
 	if (my_state != LOOKING_FOR_SP)
 	{
-		print("Error! The state of the node is NOT 'LOOKING_FOR_SP'. The node does not have access to this function!\n");
+		printf("Error! The state of the node is NOT 'LOOKING_FOR_SP'. The node does not have access to this function!\n");
 	}
 
 	neighbor_nudge(SP_LOOK_REQ); //Will send to all neighbors in the network a request to look for an SP.
@@ -1090,7 +1093,7 @@ void neighbor_nudge_sp_reply(am_type what_purpose, uint16_t senderID)
 
 	header = (am_packet *) malloc(sizeof(am_packet)); //Malloc call. Gives memory to create am_packet.
 	header->id = my_id;
-	header->type = SP_FOUND_REPLY; //This type will tell nodes to keep spreading the word that an SP was found!
+	header->type = what_purpose; //This type will tell nodes to keep spreading the word that an SP was found!
 	header->node_role = my_role;
 	header->found_sp_id = foundSPID;
 	header->found_sp_addr = foundSPAddr;
@@ -1124,11 +1127,12 @@ int neighbor_sp_scour(int senderID)
 	{
 		//This will notify the caller that this node has already been searched.
 		//This prevents double searches and double sends from multiple nodes.
-		return -1
+		return -1;
 	}
 	//Now, begin the searching process
 	sp_search_status = HAVE_BEEN_ASKED; //To ensure this process only happens once per node.
-	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
+	int neighIter = 0;
+	for (neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
 	{
 		//If an SP is found in the node's neighbor list, then the search process is complete.
 		if (neigh_list[neighIter]->node_role == SP)
@@ -1145,14 +1149,13 @@ int neighbor_sp_scour(int senderID)
 		//If my neighbor list only contains the sender node...
 		if (num_trusted_neigh == 1 && neigh_list[num_trusted_neigh-1]->id == senderID)
 		{
-			return 1
+			return 1;
 		}
 		//If I have other nodes I can send to that are not the neighbor...
 		else
 		{
 			return 2;
 		}
-		
 	}
 }
 
@@ -1238,7 +1241,7 @@ void purge_received_candidates_list()
 	//Destroys the whole received candidates list for the next time it is needed.
 	while (num_candidate_tries != 0)
 	{
-		received_candidates_remove(num_candidate_tries(num_candidate_tries-1));
+		received_candidates_remove(num_candidate_tries-1);
 	}
 }
 
@@ -1295,7 +1298,7 @@ void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned
 		{
 			if (authenticated_list[authIter]->id == id)
 			{
-				neighList[num_trusted_neigh]->node_role = authenticated_list[authIter]->role;
+				neigh_list[num_trusted_neigh]->node_role = authenticated_list[authIter]->role;
 				//We may need to go back and change the type for role to <<uint8_t>>
 			}
 		}
@@ -1313,7 +1316,7 @@ void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned
 		//Print the details about the new node added to the neighbor list.
 		//This will print the ID and the Role Type of the new node discovered.
 		printf("ID: %u\n", (unsigned int)neigh_list[num_trusted_neigh-1]->id);
-		printf("Role Type: %u\n", (unsigned int)neigh_list[num_trusted_neigh-1]->node_role)
+		printf("Role Type: %u\n", (unsigned int)neigh_list[num_trusted_neigh-1]->node_role);
 
 	}
 

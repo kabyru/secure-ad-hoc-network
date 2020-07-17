@@ -349,7 +349,7 @@ int auth_request_recv(char *addr, char *ptr);
 int auth_issue_recv(char *ptr);
 int auth_invite_recv(char *ptr);
 
-int neigh_sign_recv(EVP_PKEY *pkey, uint32_t addr, uint16_t id, char *ptr, char *auth_packet);
+int neigh_sign_recv(EVP_PKEY *pkey, uint32_t addr, uint16_t id, role_type receivedRole, char *ptr, char *auth_packet);
 int neigh_pc_recv(in_addr addr, char *ptr);
 
 
