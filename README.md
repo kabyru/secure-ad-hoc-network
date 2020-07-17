@@ -116,6 +116,8 @@ However, in situations where...
 ### What happens when an SP is potentially missing from the network?
 During normal AUTHENTICATED node operation, after engaging with other nodes to ensure authentication status is intact, the node will check its direct neighbor list to see if an SP node resides in the network as a neighbor. Should the node detect that an SP node is not available as a direct neighbor, the node will flag this as a potential issue to investigate.
 
+Before continuing further, the network engages in an **election process** (hence the name) to determine which remaining node within the network would make the best SP Node candidate. The information used to determine the best SP Node candidate is the *timestamp of when the node discovered that an SP was missing*, hence the new SP Node is decided on a First Come, First Serve basis. This mechanism is done to prevent multiple SP nodes from joining the network, as a requirement of this ad-hoc network configuration is that *only one SP node is allowed at a time.*
+
 Before making assumptions that an SP node must be missing, there are possible explanations to this problem that do not implicate that an issue exists:
 
 * An SP node resides in the network, but just isn't a neighbor to the node.
@@ -123,7 +125,7 @@ Before making assumptions that an SP node must be missing, there are possible ex
 
 To ensure that the missing SP node is not just due to the fact that its within the network but not a neighbor, the the alerted node will begin a search for an SP node in the network by making use of a newly-created feature: **Neighbor Nudge**. Neighbor Nudge is a lightweight way to send small packets of information between connected nodes in the network that do not contain compromising information about the network, such as authentication information.
 
-Using Neighbor Nudge, the search for an SP node within the network is conducted by flooding the network with requests for each node to search their neighbors for an SP node. One of two outcomes are possible from this process:
+Using Neighbor Nudge, the search for an SP node within the network is conducted by flooding the network with messages containing requests for each node to search their neighbors for an SP node. One of two outcomes are possible from this process:
 
 * An SP node is found in the neighbor list of an authenticated node in the network. The location of this node is sent back to the originator of the request.
 
