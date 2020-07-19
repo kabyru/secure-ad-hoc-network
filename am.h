@@ -137,7 +137,7 @@ typedef enum key_algorithm_en{
 #define AES_IV_SIZE 		16
 #define RAND_LEN 			(AES_BLOCK_SIZE*48)-1	//Chosen so auth_packets are well below MAXBUFLEN
 
-#define CRYPTO_DIR			"./.crypto/"
+#define CRYPTO_DIR			"crypto/"
 #define MY_KEY				CRYPTO_DIR "my_private_key"
 #define MY_CERT				CRYPTO_DIR "my_pc"
 #define MY_REQ 				CRYPTO_DIR "my_pc_req"
@@ -162,77 +162,6 @@ typedef struct sockaddr_storage sockaddr_storage;
 typedef struct sockaddr sockaddr;
 typedef struct in_addr in_addr;
 typedef struct timeval timeval;
-
-
-/* AM Enums */
-typedef enum am_state_en {
-	READY,					//0
-	SEND_INVITE,			//1
-	WAIT_FOR_REQ,			//2
-	SEND_REQ,				//3
-	WAIT_FOR_PC,			//4
-	SEND_PC,				//5
-	SENDING_NEW_SIGS,		//6
-	SENDING_SIG,			//7
-	WAIT_FOR_NEIGH_SIG,		//8
-	WAIT_FOR_NEIGH_PC,		//8
-	WAIT_FOR_NEIGH_SIG_ACK,	//9 - special for SP waiting for sign as "ACK" after ISSUE
-	WAIT_FOR_REQ_SIG,
-	LOOKING_FOR_SP,			//This is the state of the node that sends out the first REQ to neighbors to find the SP. The node holding this status will become the SP if no SP can be found.
-	ON_HOLD_FOR_SP,			//State of node that is waiting for the network to find an SP. Keeps the network from adding new nodes in the meantime.
-	ON_HOLD_FOR_SP_SEARCH,
-	LOST_CANDIDATE
-
-} am_state;
-
-//This enum corresponds to the process nodes do to determine if they need to become SPs since an SP in their network is missing.
-//This enum will also prevent neighboring nodes from becoming new nodes too.
-//This may or may not be integrated into am_state_en. Have not decided yet.
-typedef enum looking_for_sp_en { 
-	HAVE_NOT_BEEN_ASKED,	//0
-	HAVE_BEEN_ASKED			//1
-} sp_search_state;
-
-//This enum corresponds to the process of sending back the location of the SP node to the originator.
-//Very similar to sp_search_state but this is for the reply.
-typedef enum sending_back_sp_en {
-	HAVE_NOT_SENT_BACK,		//0
-	HAVE_SENT_BACK			//1
-} sp_sendback_state;
-
-//This enum corresponds to the process of learning which node should be the SP candidate.
-typedef enum sp_candidate_en {
-	NOT_ASKED,	//0
-	BEEN_ASKED	//1
-} sp_candidate_state;
-
-typedef enum am_type_en{
-	NO_AM_DATA,
-	SIGNATURE,
-	AL_FULL,
-	AL_ROW,
-	AUTH_INVITE,
-	AUTH_REQ,
-	AUTH_ISSUE,
-	AUTH_ACK,
-	NEIGH_PC,
-	NEIGH_SIGN,
-	NEIGH_PC_REQ,
-	NEIGH_SIG_REQ,
-	SP_LOOK_REQ,
-	SP_FOUND_REPLY,
-	SP_CANDIDATE_SEARCH,
-	REBOOT
-} am_type;
-
-typedef enum role_type_en{
-	UNAUTHENTICATED,
-	AUTHENTICATED,
-	RESTRICTED,
-	MASTER,
-	SP
-} role_type;
-
 
 /* AM Structs */
 
@@ -304,7 +233,74 @@ typedef struct routing_auth_packet_st {
 //	unsigned char iv[AES_IV_SIZE];
 //}__attribute__((packed)) routing_auth_packet;
 
+/* AM Enums */
+typedef enum am_state_en {
+	READY,					//0
+	SEND_INVITE,			//1
+	WAIT_FOR_REQ,			//2
+	SEND_REQ,				//3
+	WAIT_FOR_PC,			//4
+	SEND_PC,				//5
+	SENDING_NEW_SIGS,		//6
+	SENDING_SIG,			//7
+	WAIT_FOR_NEIGH_SIG,		//8
+	WAIT_FOR_NEIGH_PC,		//8
+	WAIT_FOR_NEIGH_SIG_ACK,	//9 - special for SP waiting for sign as "ACK" after ISSUE
+	WAIT_FOR_REQ_SIG,
+	LOOKING_FOR_SP,			//This is the state of the node that sends out the first REQ to neighbors to find the SP. The node holding this status will become the SP if no SP can be found.
+	ON_HOLD_FOR_SP,			//State of node that is waiting for the network to find an SP. Keeps the network from adding new nodes in the meantime.
+	ON_HOLD_FOR_SP_SEARCH,
+	LOST_CANDIDATE
 
+} am_state;
+
+//This enum corresponds to the process nodes do to determine if they need to become SPs since an SP in their network is missing.
+//This enum will also prevent neighboring nodes from becoming new nodes too.
+//This may or may not be integrated into am_state_en. Have not decided yet.
+typedef enum looking_for_sp_en { 
+	HAVE_NOT_BEEN_ASKED,	//0
+	HAVE_BEEN_ASKED			//1
+} sp_search_state;
+
+//This enum corresponds to the process of sending back the location of the SP node to the originator.
+//Very similar to sp_search_state but this is for the reply.
+typedef enum sending_back_sp_en {
+	HAVE_NOT_SENT_BACK,		//0
+	HAVE_SENT_BACK			//1
+} sp_sendback_state;
+
+//This enum corresponds to the process of learning which node should be the SP candidate.
+typedef enum sp_candidate_en {
+	NOT_ASKED,	//0
+	BEEN_ASKED	//1
+} sp_candidate_state;
+
+typedef enum am_type_en{
+	NO_AM_DATA,
+	SIGNATURE,
+	AL_FULL,
+	AL_ROW,
+	AUTH_INVITE,
+	AUTH_REQ,
+	AUTH_ISSUE,
+	AUTH_ACK,
+	NEIGH_PC,
+	NEIGH_SIGN,
+	NEIGH_PC_REQ,
+	NEIGH_SIG_REQ,
+	SP_LOOK_REQ,
+	SP_FOUND_REPLY,
+	SP_CANDIDATE_SEARCH,
+	REBOOT
+} am_type;
+
+typedef enum role_type_en{
+	UNAUTHENTICATED,
+	AUTHENTICATED,
+	RESTRICTED,
+	MASTER,
+	SP
+} role_type;
 
 /* Functions */
 void am_thread_init(char *dev, sockaddr_in addr, sockaddr_in broad);

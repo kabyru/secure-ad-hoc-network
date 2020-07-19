@@ -29,6 +29,7 @@
 //
 
 #include "am.h"
+#include <errno.h>
 
 
 
@@ -305,6 +306,7 @@ void *am_main() {
 	num_candidate_tries = 0;
 	subject_name = malloc(FULL_SUB_NM_SZ);
 	memset(subject_name, 0, FULL_SUB_NM_SZ);
+	//printf("Subject Name: %s\n", subject_name);
 	if(my_role == SP) {
 
 		/* If you are the SP, create a PC0 */
@@ -1153,18 +1155,15 @@ int neighbor_sp_scour(int senderID)
 	}
 	
 	//Code inside will run if no SP node was found in the neighbor list
-	if (neighIter == num_trusted_neigh)
+	//If my neighbor list only contains the sender node...
+	if (num_trusted_neigh == 1 && neigh_list[num_trusted_neigh-1]->id == senderID)
 	{
-		//If my neighbor list only contains the sender node...
-		if (num_trusted_neigh == 1 && neigh_list[num_trusted_neigh-1]->id == senderID)
-		{
-			return 1;
-		}
-		//If I have other nodes I can send to that are not the neighbor...
-		else
-		{
-			return 2;
-		}
+		return 1;
+	}
+	//If I have other nodes I can send to that are not the neighbor...
+	else
+	{
+		return 2;
 	}
 }
 
@@ -1193,7 +1192,7 @@ void al_add(uint32_t addr, uint16_t id, role_type role, unsigned char *subject_n
 	inet_ntop( AF_INET, &(authenticated_list[num_auth_nodes]->addr), (char *)&addr_char, sizeof (addr_char) );
 
 	printf("IP ADDRESS   : %s\n", addr_char);
-	if(authenticated_list[num_auth_nodes]->role == 3) {
+	if(authenticated_list[num_auth_nodes]->role == 4) {
 		printf("ROLE         : Service Proxy Node\n");
 	} else {
 		printf("ROLE         : Authenticated Node\n");
@@ -1299,18 +1298,19 @@ void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned
 		neigh_list[num_trusted_neigh]->last_seq_num = 0;
 		neigh_list[num_trusted_neigh]->last_rcvd_time = time (NULL);
 		neigh_list[num_trusted_neigh]->num_keystream_fails = 0;
+		neigh_list[num_trusted_neigh]->node_role = receivedRole;
 		//Now, add the node_role
 
 		//It may be better to assign node_role by pulling this role from the AL.
 		//Since the neighbor list is a sublist of the authenticated list, this should NEVER fail.
-		for (int authIter = 0; authIter < MAX_AUTH_NODES; authIter++)
+		/*for (int authIter = 0; authIter < MAX_AUTH_NODES; authIter++)
 		{
 			if (authenticated_list[authIter]->id == id)
 			{
 				neigh_list[num_trusted_neigh]->node_role = authenticated_list[authIter]->role;
 				//We may need to go back and change the type for role to <<uint8_t>>
 			}
-		}
+		} */
 
 		/* //If, for some reason, the neighbor node is not in the Authenticated List. This SHOULDN'T happen.
 		if (authIter == MAX_AUTH_NODES)
@@ -1370,12 +1370,6 @@ void openssl_tool_gen_rand(unsigned char **rv, int len) {
 /* Create PC0 for the SP */
 int openssl_cert_create_pc0(EVP_PKEY **pkey, unsigned char **subject_name) {
 
-
-	//A moral issue lies here.
-	//If an outer worlds node needs a PC0 to become an SP, do we
-	//Keep the PC0 certificate in memory in case we need it
-	//Or keep the file close and just send that across the network.
-
 	X509 *pc0 = NULL;
 	FILE *fp;
 	BIO *bio_err;
@@ -1385,16 +1379,11 @@ int openssl_cert_create_pc0(EVP_PKEY **pkey, unsigned char **subject_name) {
 
 	openssl_cert_selfsign(&pc0, pkey, subject_name); //Self Signs PC0
 
-//	RSA_print_fp(stdout,pkey->pkey.rsa,0);
-//	EC_KEY_print_fp(stdout, pkey->pkey.ec_key, 0);
-//	X509_print_fp(stdout,pc0);
-
-//	PEM_write_PrivateKey(stdout,pkey,NULL,NULL,0,NULL, NULL);
-//	PEM_write_X509(stdout,pc0);
-
 	/* Write X509 PC0 to a file */
+	errno = 0;
 	if(!(fp = fopen(MY_CERT, "w")))
 		fprintf(stderr, "Error opening file %s for writing!\n",MY_CERT);
+	printf("Error %d \n", errno);
 	if(PEM_write_X509(fp, pc0) != 1)
 		fprintf(stderr, "Error while writing request to file %s", MY_CERT);
 	fclose(fp);
