@@ -1,6 +1,8 @@
 # The (Democracy) Secure Ad-hoc Network - (D)SAN
 ## A Secure Implementation of B.A.T.M.A.N., forked from secure-ad-hoc-network by 'loosky'
 
+#### [Read the final report here.](https://github.com/kabyru/secure-ad-hoc-network/blob/master/final-reports/CSE%20693%20Final%20Report.pdf)
+
 ### Introduction
 The Democracy Secure Ad-hoc Network is a secure implementation of the pro-active ad-hoc routing protocol [B.A.T.M.A.N. Daemon](https://github.com/open-mesh-mirror/batmand).
 
