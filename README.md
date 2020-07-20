@@ -24,7 +24,7 @@ The command to initialize a SP within the network is:
 #### ...where the network interface is assumed to be 'wlan0.'
 
 The command to initialize an authenticated node within the network is:
-> ./batmand --role sp -d 4 wlan0
+> ./batmand --role authenticated -d 4 wlan0
 
 #### ...where the network interface is assumed to be 'wlan0.'
 ----------------------------------------------
