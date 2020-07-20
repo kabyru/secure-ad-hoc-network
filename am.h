@@ -10,6 +10,11 @@
  * Project    : Implementing a Secure Ad Hoc Network
  * Institution: NTNU (Norwegian University of Science & Technology), ITEM (Institute of Telematics)
  *
+ * Forked by  : Kaleb Byrum
+ * Modified on: 15 Jul. 2020
+ * Email      : kabyru01@louisville.edu
+ * Project    : CSE 693: Secure Ad Hoc Network
+ * Institution: University of Louisville, KY, USA
  */
 
 #ifndef AM_H
@@ -132,7 +137,7 @@ typedef enum key_algorithm_en{
 #define AES_IV_SIZE 		16
 #define RAND_LEN 			(AES_BLOCK_SIZE*48)-1	//Chosen so auth_packets are well below MAXBUFLEN
 
-#define CRYPTO_DIR			"./.crypto/"
+#define CRYPTO_DIR			"crypto/"
 #define MY_KEY				CRYPTO_DIR "my_private_key"
 #define MY_CERT				CRYPTO_DIR "my_pc"
 #define MY_REQ 				CRYPTO_DIR "my_pc_req"
@@ -158,7 +163,6 @@ typedef struct sockaddr sockaddr;
 typedef struct in_addr in_addr;
 typedef struct timeval timeval;
 
-
 /* AM Structs */
 
 typedef char * secure_t;
@@ -182,6 +186,12 @@ typedef struct trusted_node_st {
 
 } trusted_node;
 
+//This is where the SP list would go
+typedef struct trusted_sp_st {
+	uint16_t		id;			//The unique ID of the SP node
+	EVP_PKEY		*pub_key; 	//The public key of the SP node, which is used to validate nodes.
+} sp_struct;
+
 typedef struct trusted_neigh_st {
 	uint16_t 		id;				//unique
 	uint32_t		addr;			//unique ip addr
@@ -190,11 +200,24 @@ typedef struct trusted_neigh_st {
 	unsigned char	*mac;			//Message Authentication Code (current)
 	time_t 			last_rcvd_time;
 	uint8_t			num_keystream_fails;
+	uint8_t 		node_role; //Added node_role here! (7/9) We may want to change this to uint8_t
 } trusted_neigh;
+
+typedef struct candidate_node_st {
+	uint16_t		id;				//Unique ID
+	uint32_t		time;			//Unique Timestamp
+} candidate_node;
 
 typedef struct am_packet_st {
 	uint16_t 	id;
 	uint8_t 	type;
+	uint8_t		node_role; //Added node_role here! (7/9)
+	uint16_t	found_sp_id; //Holds the ID of the SP Node found in the network.
+	uint32_t	found_sp_addr; //Holds the IP address of the SP Node found in the network.
+	uint16_t	num_nodes_over; //This tells how many nodes the request or reply had to travel to get to the SP node.
+
+	//Consider expanding the entries within this packet, this will make SP Replies so much smoother.
+
 } __attribute__((packed)) am_packet;
 
 typedef struct routing_auth_packet_st {
@@ -210,8 +233,6 @@ typedef struct routing_auth_packet_st {
 //	unsigned char iv[AES_IV_SIZE];
 //}__attribute__((packed)) routing_auth_packet;
 
-
-
 /* AM Enums */
 typedef enum am_state_en {
 	READY,					//0
@@ -225,8 +246,34 @@ typedef enum am_state_en {
 	WAIT_FOR_NEIGH_SIG,		//8
 	WAIT_FOR_NEIGH_PC,		//8
 	WAIT_FOR_NEIGH_SIG_ACK,	//9 - special for SP waiting for sign as "ACK" after ISSUE
-	WAIT_FOR_REQ_SIG
+	WAIT_FOR_REQ_SIG,
+	LOOKING_FOR_SP,			//This is the state of the node that sends out the first REQ to neighbors to find the SP. The node holding this status will become the SP if no SP can be found.
+	ON_HOLD_FOR_SP,			//State of node that is waiting for the network to find an SP. Keeps the network from adding new nodes in the meantime.
+	ON_HOLD_FOR_SP_SEARCH,
+	LOST_CANDIDATE
+
 } am_state;
+
+//This enum corresponds to the process nodes do to determine if they need to become SPs since an SP in their network is missing.
+//This enum will also prevent neighboring nodes from becoming new nodes too.
+//This may or may not be integrated into am_state_en. Have not decided yet.
+typedef enum looking_for_sp_en { 
+	HAVE_NOT_BEEN_ASKED,	//0
+	HAVE_BEEN_ASKED			//1
+} sp_search_state;
+
+//This enum corresponds to the process of sending back the location of the SP node to the originator.
+//Very similar to sp_search_state but this is for the reply.
+typedef enum sending_back_sp_en {
+	HAVE_NOT_SENT_BACK,		//0
+	HAVE_SENT_BACK			//1
+} sp_sendback_state;
+
+//This enum corresponds to the process of learning which node should be the SP candidate.
+typedef enum sp_candidate_en {
+	NOT_ASKED,	//0
+	BEEN_ASKED	//1
+} sp_candidate_state;
 
 typedef enum am_type_en{
 	NO_AM_DATA,
@@ -240,7 +287,11 @@ typedef enum am_type_en{
 	NEIGH_PC,
 	NEIGH_SIGN,
 	NEIGH_PC_REQ,
-	NEIGH_SIG_REQ
+	NEIGH_SIG_REQ,
+	SP_LOOK_REQ,
+	SP_FOUND_REPLY,
+	SP_CANDIDATE_SEARCH,
+	REBOOT
 } am_type;
 
 typedef enum role_type_en{
@@ -251,12 +302,12 @@ typedef enum role_type_en{
 	SP
 } role_type;
 
-
-
-
 /* Functions */
 void am_thread_init(char *dev, sockaddr_in addr, sockaddr_in broad);
 void am_thread_kill();
+void am_thread_kill_from_reboot();
+void am_thread_init_from_reboot();
+void *am_reboot();
 void *am_main();
 
 void socks_am_setup(int32_t *recv, int32_t *send);
@@ -288,13 +339,13 @@ void neigh_sign_send(sockaddr_in *addr, char *buf);
 void neigh_req_pc_send(sockaddr_in *neigh_addr);
 void neigh_pc_send(sockaddr_in *sin_dest);
 
-am_type am_header_extract(char *buf, char **ptr, int *id);
+am_type am_header_extract(char *buf, char **ptr, int *id, role_type *role_of_rcvd_node, uint16_t *rcvd_sp_id, uint32_t *rcvd_sp_addr, uint16_t *rcvd_num_nodes_over);
 
 int auth_request_recv(char *addr, char *ptr);
 int auth_issue_recv(char *ptr);
 int auth_invite_recv(char *ptr);
 
-int neigh_sign_recv(EVP_PKEY *pkey, uint32_t addr, uint16_t id, char *ptr, char *auth_packet);
+int neigh_sign_recv(EVP_PKEY *pkey, uint32_t addr, uint16_t id, role_type receivedRole, char *ptr, char *auth_packet);
 int neigh_pc_recv(in_addr addr, char *ptr);
 
 
@@ -309,7 +360,7 @@ void openssl_key_master_ctx(EVP_CIPHER_CTX *master);
 unsigned char *openssl_aes_encrypt(EVP_CIPHER_CTX *e, unsigned char *plaintext, int *len);
 
 void al_add(uint32_t addr, uint16_t id, role_type role, unsigned char *subject_name, EVP_PKEY *key);
-void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value);
+void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned char *mac_value);
 int neig_list_remove(int pos);
 
 EVP_PKEY *openssl_key_copy(EVP_PKEY *key);
@@ -328,10 +379,27 @@ void neigh_sign_req_send(uint32_t addr);
 
 void secure_usage();
 
+void all_points_bulletin();
+void neighbor_nudge(am_type what_purpose);
+void neighbor_nudge_forward(am_type what_purpose, uint16_t senderID);
+void kill_switch();
+void presidential_candidacy();
+int presidential_debate(long localNodeTime, long senderNodeTime);
+void sp_reply_start();
+void neighbor_nudge_sp_reply(am_type what_purpose, uint16_t senderID);
+int neighbor_sp_scour(int senderID);
+void received_candidates_add(uint32_t time, uint16_t id);
+int	received_candidates_remove(int pos);
+void purge_received_candidates_list();
+
+
 
 /* Necessary external variables */
 extern role_type my_role, req_role;
 extern am_state my_state;
+extern sp_search_state sp_search_status;
+extern sp_sendback_state sp_sendback_status;
+extern sp_candidate_state sp_candidate_status;
 extern pthread_t am_main_thread;
 extern uint32_t new_neighbor;
 extern uint32_t trusted_neighbors[100];
@@ -340,7 +408,10 @@ extern uint16_t auth_seq_num;
 extern pthread_mutex_t auth_lock;
 extern int num_auth_nodes;
 extern int num_trusted_neigh;
+extern int num_candidate_tries;
+//extern time_t localNodeTimestamp;
 
 extern trusted_neigh *neigh_list[100];
+extern candidate_node *received_candidates[100];
 
 #endif

@@ -10,11 +10,11 @@
  * Project    : Implementing a Secure Ad Hoc Network
  * Institution: NTNU (Norwegian University of Science & Technology), ITEM (Institute of Telematics)
  *
- * Forked by : Kaleb Byrum
- * Modified on : 30 Jun. 2020
- * Email : kabyru01@louisville.edu
- * Project : CSE 693: Secure Ad Hoc Network
- * Institution : University of Louisville, KY, USA
+ * Forked by  : Kaleb Byrum
+ * Modified on: 15 Jul. 2020
+ * Email      : kabyru01@louisville.edu
+ * Project    : CSE 693: Secure Ad Hoc Network
+ * Institution: University of Louisville, KY, USA
  */
 
 // Usage function for my AM extension */
@@ -29,6 +29,7 @@
 //
 
 #include "am.h"
+#include <errno.h>
 
 
 
@@ -97,18 +98,24 @@ void tool_dump_memory(unsigned char* data, size_t len) {
 /* External Variables */
 role_type my_role, req_role;
 am_state my_state;
+sp_search_state sp_search_status;
+sp_sendback_state sp_sendback_status;
+sp_candidate_state sp_candidate_status;
 pthread_t am_main_thread;
+pthread_t reboot_thread;
 uint32_t new_neighbor, prev_neighbor;
 //uint32_t trusted_neighbors[100];
 unsigned char *auth_value;
 int auth_value_len;
 uint16_t auth_seq_num;
 
-#define MAX_AUTH_NODES 100;
-#define MAX_NEIGH_NODES 100;
+#define MAX_AUTH_NODES 100
+#define MAX_NEIGH_NODES 100
+#define MAX_CANDIDATE_NODES 100
 trusted_node *authenticated_list[MAX_AUTH_NODES];
 trusted_neigh *neigh_list[MAX_NEIGH_NODES];
-int num_auth_nodes, num_trusted_neigh;
+candidate_node *received_candidates[MAX_CANDIDATE_NODES]; //Will be used to track nodes that have already tried for candidacy.
+int num_auth_nodes, num_trusted_neigh, num_candidate_tries;
 
 pthread_mutex_t auth_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -123,7 +130,25 @@ int32_t am_send_socket, am_recv_socket;
 unsigned char *current_key = NULL;
 time_t last_send_time;
 
-/* Usage function for my AM extension */
+//Global variables used in SP_LOOK_REQ operations
+uint16_t foundSPID;
+uint32_t foundSPAddr;
+uint16_t numNodesOver = 0;
+int SPSearch;
+
+uint16_t rebootMarker = 0;
+
+time_t localNodeTimestamp;
+
+sockaddr_in savedAddr;
+sockaddr_in savedBroad;
+
+
+/* Variables used by AM in case of a reboot. A reboot requires the parameters from BATMAN.c that are provided in am_thread_init. */
+//These might be unnecessary and covered above in previous global variable declarations.
+
+
+/* Usage function for AM extension */
 void secure_usage() {
 	fprintf( stderr, "Secure Usage: batmand [options] -R/--role 'sp/authenticated/restricted' interface [interface interface]\n" );
 	fprintf( stderr, "       -R / --role 'sp'              start as Service Proxy / Master node\n" );
@@ -161,10 +186,58 @@ void am_thread_kill() {
 		free(neigh_list[i]->mac);
 		free(neigh_list[i]);
 	}
+	for (i=0; i<num_candidate_tries; i++) {
+		free(received_candidates[i]);
+	}
 	free(interface);
 	free(auth_value);
 	socks_am_destroy(&am_send_socket, &am_recv_socket);
 
+}
+
+void am_thread_kill_from_reboot() {
+	pthread_kill(&am_main_thread);
+	int i;
+	for(i=0; i<num_auth_nodes; i++) {
+		free(authenticated_list[i]->name);
+		free(authenticated_list[i]->pub_key);
+		free(authenticated_list[i]);
+	}
+	for(i=0; i<num_trusted_neigh; i++) {
+		free(neigh_list[i]->mac);
+		free(neigh_list[i]);
+	}
+	for (i=0; i<num_candidate_tries; i++) {
+		free(received_candidates[i]);
+	}
+	//free(interface);
+	free(auth_value);
+	socks_am_destroy(&am_send_socket, &am_recv_socket);
+}
+
+void am_thread_init_from_reboot()
+{
+	//my_addr
+	//broadcast_addr
+	//interface
+	//All three of these are still intact from last time, because they are global variables.
+	rebootMarker = 1;
+	pthread_create(&am_main_thread, NULL, am_main, NULL);
+}
+
+void *am_reboot()
+{
+	//First, save copies of the original parameters of the node.
+	//savedAddr = my_addr;
+	//savedBroad = broadcast_addr;
+	//char *savedInterface = (char *) malloc(strlen(interface)+1);
+	//memset(savedInterface, 0, strlen(interface)+1);
+	//strncpy(savedInterface, interface, strlen(interface));
+
+	//Next, kill the current node state, and promptly restart it.
+	am_thread_kill_from_reboot();
+	am_thread_init_from_reboot();
+	pthread_exit(NULL);
 }
 
 
@@ -197,6 +270,8 @@ void *am_main() {
 
 	int key_count = 0;
 	int rcvd_id;
+	//Received role type has been added here.
+	role_type rcvd_role;
 	time_t test_timer = 0, state_timer = 0;
 
 
@@ -228,8 +303,10 @@ void *am_main() {
 
 	num_trusted_neigh = 0;
 	num_auth_nodes = 0;
+	num_candidate_tries = 0;
 	subject_name = malloc(FULL_SUB_NM_SZ);
 	memset(subject_name, 0, FULL_SUB_NM_SZ);
+	//printf("Subject Name: %s\n", subject_name);
 	if(my_role == SP) {
 
 		/* If you are the SP, create a PC0 */
@@ -254,6 +331,13 @@ void *am_main() {
 	am_payload_ptr = NULL;
 	dst = NULL;
 
+	sp_search_status = HAVE_NOT_BEEN_ASKED; //Initially sets that a node has not been asked about an SP.
+	sp_sendback_status = HAVE_NOT_SENT_BACK;
+	sp_candidate_status = NOT_ASKED;
+	
+	//Initializes the state of the node as READY.
+	my_state = READY;
+
 	/* Main loop for the AM thread, will only exit when Batman is terminated */
 	while(1) {
 
@@ -268,7 +352,7 @@ void *am_main() {
 		}
 
 		if(data_rcvd) {
-			am_type_rcvd = am_header_extract(am_recv_buf_ptr, &am_payload_ptr, &rcvd_id);
+			am_type_rcvd = am_header_extract(am_recv_buf_ptr, &am_payload_ptr, &rcvd_id, &rcvd_role, &foundSPID, &foundSPAddr, &numNodesOver);
 
 			in_addr neigh_addr;
 			neigh_addr = ((sockaddr_in*)((sockaddr *)&recv_addr))->sin_addr;
@@ -280,7 +364,7 @@ void *am_main() {
 
 					if (my_state == WAIT_FOR_NEIGH_SIG_ACK) {
 
-						neigh_list_add(dst->sin_addr.s_addr, rcvd_id, NULL);
+						neigh_list_add(dst->sin_addr.s_addr, rcvd_id, rcvd_role, NULL);
 						al_add(dst->sin_addr.s_addr, rcvd_id, AUTHENTICATED, subject_name, tmp_pub);
 
 						if(pthread_mutex_trylock(&auth_lock) == 0) {
@@ -300,14 +384,179 @@ void *am_main() {
 						my_state = READY;
 					}
 
-					neigh_sign_recv(pkey, neigh_addr.s_addr, rcvd_id, am_payload_ptr, auth_pkt);
+					neigh_sign_recv(pkey, neigh_addr.s_addr, rcvd_id, rcvd_role, am_payload_ptr, auth_pkt);
 					new_neighbor = 0;
 					break;
 
+				case REBOOT:
+					//This case is when a node receives a kill switch command, which is part of the SP Reassignment Process.
+					if (rebootMarker == 1 || my_role == SP)
+					{
+						//If the state is ready, then there is no need to reboot again. The state is set to READY when a reboot happens.
+						printf("Received reboot is not necessary. This node has already reboot.\n");
+					}
+					else
+					{
+						//Now, the code within here will execute when a reboot needs to occur.
+						my_role = AUTHENTICATED;
+
+						//Send the command to other nodes before ending this thread...
+						neighbor_nudge_forward(REBOOT, rcvd_id);
+
+						//Finally, reboot the node.
+						pthread_create(&reboot_thread, NULL, am_reboot, NULL);
+					}
+					
+					break;
+
+				case SP_CANDIDATE_SEARCH:
+
+					//The addr entry will be used to hold the time_t of the sending node.
+					//This case can only occur if the state of the node is set to LOOKING_FOR_SP
+
+					//First, check to see if this node has already forfeit its candidacy
+					if (my_state != ON_HOLD_FOR_SP)
+					{
+						printf("SP_CANDIDATE_SEARCH is only for SP Candidate Nodes! This node is not a candidate or has already been asked.\n");
+						//Break out of case early, since, there's nothing else to be done here.
+						my_state = ON_HOLD_FOR_SP_SEARCH;
+						break;
+					}
+					
+					int searchedBefore = 0;
+					//Second, confirm that we haven't compared this node already.
+					for (int icIter = 0; icIter < num_candidate_tries; icIter++)
+					{
+						if (received_candidates[icIter]->id == rcvd_id)
+						{
+							printf("This candidate node has already been evaluated! Exiting SP_CANDIDATE_SEARCH ops...\n");
+							searchedBefore = 1;
+						}
+					}
+
+					if (searchedBefore == 0)
+					{
+
+						long sentNodeTime = foundSPAddr; //This is the time-stamp sent by the sending node, which will be compared to our node's timestamp.
+							//localNodeTimestamp holds this node's time. sendNodeTime holds the sender's time.
+						long localNodeTime = localNodeTimestamp;
+
+						int debateResult = presidential_debate(localNodeTime, sentNodeTime);
+
+						switch (debateResult)
+						{
+							case 0:
+								printf("The sender is better candidate for an SP. Ending this node's run for SP...\n");
+								//sp_candidate_status = BEEN_ASKED;
+								my_state = ON_HOLD_FOR_SP_SEARCH; //This status makes the node wait for the SP Search Process to end, even though they lost the candidacy.
+								received_candidates_add(foundSPAddr, rcvd_id);
+								//There is no need to send a reply to other nodes, because this process will happen locally on the sender as well.
+								break;
+							case 1:
+								printf("This node is a better candidate for an SP. Keeping the run alive...\n");
+								//sp_candidate_status = BEEN_ASKED;
+								//State remains LOOKING_FOR_SP
+								received_candidates_add(foundSPAddr, rcvd_id);
+								break;
+							default:
+								printf("Error found in presidential_debate function... Improper return!\n");
+								break;
+						}
+						//Now, have the process begin again for other nodes in the network.
+						presidential_candidacy();
+					}
+					break;
+
+				case SP_LOOK_REQ:
+					//Occurs in nodes that receive requests to look for SP nodes in their neighbor lists.
+
+					//A function will search the neighbor list and return a value that reflects whether an SP exists within the neighbor list or not.
+					//We have rcvd_id to work with, which is the unique ID of the sender. We can use this to prevent the function from sending a SP Search REQ back to it.
+					
+					SPSearch = neighbor_sp_scour(rcvd_id);
+
+					//This means that this node has already searched for an SP and acted.
+					//No need to double send!
+					if (SPSearch == -1)
+					{
+						printf("Node has already looked for an SP! Preventing double-send loop...\n");
+					}
+
+					//This means that an SP Node was found IN THIS NODE'S NEIGHBOR LIST. This means the APB process is over for the network, and we need to send it back!
+					else if (SPSearch == 0)
+					{
+						my_state = ON_HOLD_FOR_SP_SEARCH;
+						printf("An SP has been found in this neighbor list!\n");
+						sp_reply_start();
+					}
+
+					else if (SPSearch == 1)
+					{
+						//my_state = ON_HOLD_FOR_SP;
+						my_state = ON_HOLD_FOR_SP_SEARCH;
+						printf("No SP node exists in the neighbor list, and I have no neighbors to send to!\n");
+					}
+
+					//This means that an SP was not found, but the neighbor list has nodes we can send this request to as well.
+					else if (SPSearch == 2)
+					{
+						my_state = ON_HOLD_FOR_SP_SEARCH;
+						//We can use neighbor_nudge to send this request to this node's neighbors.
+						printf("No SP node exists in the neighbor list, but I have some neighbors to ask!\n");
+						numNodesOver++;
+						neighbor_nudge_forward(SP_LOOK_REQ, rcvd_id); //Doesn't send a SP_LOOK_REQ to the sender.
+					}
+
+					break;
+				
+				case SP_FOUND_REPLY:
+
+					//First, make sure that this node hasn't been asked yet.
+					if (sp_sendback_status == HAVE_SENT_BACK)
+					{
+						//This occurs if this node has already forwarded the SP reply.
+						//No need to double send!
+						printf("Node has already forwarded SP reply! Preventing double-send loop...\n");
+						break; //Break early...
+					}
+
+					//Next, reset the search state flag.
+					//sp_search_state = HAVE_NOT_BEEN_ASKED;
+
+					//This if-statement becomes true IF THE NODE THAT RECEIVED THIS IS THE ORIGINATOR.
+					//It ends the perilous journey to look for an SP Node.
+					if (my_state == LOOKING_FOR_SP)
+					{
+						//This occurs if the node that receives this is the one that originated the request.
+						printf("An SP Node has been found in the network!\n");
+						//Now print the details of the found node.
+						printf("ID of found SP Node: %u\n", (unsigned int)foundSPID);
+						printf("IP Address of found SP Node: %lu\n", (unsigned long)foundSPAddr);
+						printf("Number of Nodes away: %u\n", (unsigned int)numNodesOver);
+
+						//Now that this mystery has been solved, we can revert this node back to READY
+						my_state = READY;
+					}
+
+					else
+					{
+						//This occurs when we have not reached the originator node yet.
+						//numNodesOver++; //Increments the number of nodes over.
+						my_state = ON_HOLD_FOR_SP_SEARCH;
+						sp_sendback_status = HAVE_SENT_BACK;
+						numNodesOver++;
+						neighbor_nudge_sp_reply(SP_FOUND_REPLY, rcvd_id);
+						
+					}
+
+					break;
+				
+				
+				
 				case NEIGH_SIGN:
 					/* Allowed in all states */
 
-					neigh_sign_recv(pkey, neigh_addr.s_addr, rcvd_id, am_payload_ptr, auth_pkt);
+					neigh_sign_recv(pkey, neigh_addr.s_addr, rcvd_id, rcvd_role, am_payload_ptr, auth_pkt);
 
 					if(my_state == WAIT_FOR_NEIGH_SIG) {
 						my_state = READY;
@@ -339,7 +588,7 @@ void *am_main() {
 							//Finally, shrink the AL by 1!
 							num_auth_nodes--;
 
-							print("Authentication List is no longer full-- One space has been opened.")
+							printf("Authentication List is no longer full-- One space has been opened.");
 						}
 
 					}
@@ -411,10 +660,11 @@ void *am_main() {
 							my_state = READY;
 							my_role = AUTHENTICATED;
 
+							//This is where the magic happens. We need to extract the node_role which is part of the AM Packet, and then implment that as part of the neighbor list.
 							in_addr emptyaddr;
 							emptyaddr.s_addr = 0;
 							openssl_cert_read(emptyaddr , &subject_name, &tmp_pub);
-							neigh_list_add(neigh_addr.s_addr, rcvd_id, NULL);
+							neigh_list_add(neigh_addr.s_addr, rcvd_id, rcvd_role, NULL);
 							al_add(neigh_addr.s_addr, rcvd_id, SP, subject_name, tmp_pub);
 							printf("1\n");
 							EVP_PKEY_free(tmp_pub);
@@ -587,33 +837,130 @@ void *am_main() {
 		}
 
 		/* Check whether some neighbors should be purged */
+
+		if (my_state == READY) //This may not be necessary. Keeps nodes from being removed during the SP Search process.
 		{
 			int i;
-			for(i=0;i<num_trusted_neigh;i++) {
+			for (i = 0; i < num_trusted_neigh; i++)
+			{
 
-				if(test_timer - 130 > neigh_list[i]->last_rcvd_time){
+				if (test_timer - 130 > neigh_list[i]->last_rcvd_time)
+				{
 					printf("Not received new keystream from #'%d' in 130 seconds, removing from neighbor list!\n", neigh_list[i]->id);
 					neig_list_remove(i);
 
 					/* If found, list is changing, so wait till next run before removing more */
 					break;
 				}
-
 			}
 		}
 
-		/* Check state, if state not READY for a while (3 seconds), go to READY */
-		if(my_state != READY) {
+		if (my_state == READY && my_role != SP) //Occurs when we're not looking for an SP or rebooting...
+		{
+			//There are probably better ways to implement this, but we now need to check the neighbor list to see if an SP is in the list. If there is no SP in the neighbor list, then this is a problem!
+			int roleIter;
+			for (roleIter = 0; roleIter < num_trusted_neigh; roleIter++)
+			{
+				if (neigh_list[roleIter]->node_role == SP)
+				{
+					break;
+				}
+			}
+			//Now, check if the previous for-loop failed to find any SPs in the neighbor list.
+			if (roleIter == num_trusted_neigh)
+			{
+				if (num_trusted_neigh == 0) //Search will not begin until other nodes are found as neighbors.
+				{
+					printf("There are no neighbors in the list right now! SP Search will not begin until neighbors are found.");
+				}
+				else
+				{
+					printf("No SP is present in the neighbor list!! No new nodes can be added to the neighbor's immediate network!\n");
+					//We now need to begin the SP Search process. This will happen on every node that cannot find an SP in their neighbor network.
+					//However, this poses a problem. This might occur on other nodes in the network!
+					//The solution: Begin a "presidential" candidacy to find a new SP should an APB to find the SP fails.
+
+					//The state will be set to ON_HOLD_FOR_SP until a reply notifies that an SP has been found.
+					//OR, until an SP is never found
+					my_state = ON_HOLD_FOR_SP;
+
+					//This will start the SP Search process
+
+					//The 'Presidential' Candidacy Search will determine which node should become the new SP if needed.
+					//Completely determining by using timestamps.
+					printf("It's possible that multiple nodes in the network have flagged that an SP might be missing.\n");
+					printf("Initiating the 'Presidential' Candidacy Search.\n");
+
+					localNodeTimestamp = 0;
+					localNodeTimestamp = time(NULL); //This is the origin of the timestamp for EVERY node in the network.
+					presidential_candidacy();
+				}
+			}
+			else
+			{
+				printf("An SP is present in this node's neighbor list. No problem here!\n");
+			}
+		}
+
+		/* Original idea: Check state, if state not READY for a while, go to READY */
+		/* We are going to repurpose this function so that if we're looking for an SP, and a certain amount of time*/
+		/* has passed, we assume that this node is the prime candidate for SP. They win the election! */
+		/* Let's say... 15 seconds as an initial guess. */
+		
+		int timerThreshold = 15; //Controls how long (seconds) we should wait before acting.
+
+		if(my_state != READY || sp_search_status == HAVE_BEEN_ASKED || sp_sendback_status == HAVE_SENT_BACK || num_candidate_tries != 0 || num_trusted_neigh == 0) //Occurs if a search flag is triggered or the state of the node is not READY
+		{	
 			if(state_timer==0)
 				state_timer = time(NULL);
 
-			if(test_timer - 3 > state_timer) {
-				my_state = READY;
+			if(test_timer - timerThreshold > state_timer)
+			{
+				sp_search_status = HAVE_NOT_BEEN_ASKED; //Reset search flags
+				sp_sendback_status = HAVE_NOT_SENT_BACK;
+				rebootMarker = 0; //Resets rebootMarker so that it may be reset again.
+
+				//Clear out received_candidates list
+				purge_received_candidates_list();
+
+				if (my_state == LOOKING_FOR_SP)
+				{
+					printf("%d seconds have passed, and no SP has been found yet. This node will become the new SP!\n", timerThreshold);
+					//At this point, because no SP was found in the network, the winning candidate node will become one.
+					//This will require the reboot of *every node in the system* to reset certificates.
+					//Idea: Use neighbor_nudge to reset each node.
+					kill_switch();
+				}
+
+				else if (my_state == ON_HOLD_FOR_SP)
+				{
+					printf("%d seconds have passed, and this node is still a candidate. This node is declared the winner!\n", timerThreshold);
+					//And now, to trigger the all_points_bulletin.
+					my_state = LOOKING_FOR_SP;
+					all_points_bulletin();
+				}
+
+				else if (num_trusted_neigh == 0 && my_role == SP)
+				{
+					printf("%d seconds have passed, this SP might be lost. Rebooting node as an AUTHENTICATED.", timerThreshold);
+					my_role = AUTHENTICATED;
+					//Calls for reboot thread to start node as an AUTHENTICATED. This is done to prevent multiple SPs in a network as an SP
+					//with no neighbors implies it has lost the network at some point.
+					pthread_create(&reboot_thread, NULL, am_reboot, NULL);
+				}
+
+				else
+				{
+					printf("%d seconds have passed, resetting state to READY...\n", timerThreshold);
+					my_state = READY;
+				}
+
 				state_timer = 0;
 			}
 
-		}else {
-
+		}
+		else
+		{
 			/* Make sure state_timer is zero if state is ready! */
 			if(state_timer!=0)
 				state_timer=0;
@@ -625,6 +972,199 @@ void *am_main() {
 	}
 	free(subject_name);
 	pthread_exit(NULL);
+}
+
+/*Begin an "All Points Bulletin" that tries to look for an SP by searching the neighbor lists of neighbor nodes to the flagging node. */
+//The state of the node MUST be "LOOKING_FOR_SP" for this to happen.
+void all_points_bulletin()
+{
+	//Sanity Check: Make sure the node has rights to use this function. Must be looking for an SP!
+	if (my_state != LOOKING_FOR_SP)
+	{
+		printf("Error! The state of the node is NOT 'LOOKING_FOR_SP'. The node does not have access to this function!\n");
+	}
+
+	neighbor_nudge(SP_LOOK_REQ); //Will send to all neighbors in the network a request to look for an SP.
+
+}
+
+/*General Function to send quick messages to neighbor nodes*/
+void neighbor_nudge(am_type what_purpose)
+{
+	am_packet *header;
+
+	header = (am_packet *) malloc(sizeof(am_packet)); //Malloc call. Gives memory to create am_packet.
+	header->id = my_id;
+	header->type = what_purpose; //New type of send within enum am_type
+	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = foundSPAddr;
+	header->num_nodes_over = numNodesOver; //Will increment with each send to a new node.
+
+
+	sockaddr_in dst;
+	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
+	{
+		dst.sin_addr.s_addr = neigh_list[neighIter]->addr; //Pulls the IP Address of the neighbor.
+		dst.sin_family = AF_INET;
+		dst.sin_port = htons(AM_PORT);
+
+		sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));
+	}
+
+
+	free(header);
+}
+
+//This functions the same ways as neighbor_nudge, but does NOT send a reply back to the sender.
+void neighbor_nudge_forward(am_type what_purpose, uint16_t senderID)
+{
+	am_packet *header;
+
+	header = (am_packet *) malloc(sizeof(am_packet)); //Malloc call. Gives memory to create am_packet.
+	header->id = my_id;
+	header->type = what_purpose; //New type of send within enum am_type
+	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = 0;
+	header->num_nodes_over = numNodesOver; //Will increment with each send to a new node.
+
+	sockaddr_in dst;
+	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
+	{
+		if (neigh_list[neighIter]->id == senderID)
+		{
+			printf("NNForward does not send a reply back to the sender!\n");
+			continue;
+		}
+		else
+		{
+			dst.sin_addr.s_addr = neigh_list[neighIter]->addr; //Pulls the IP Address of the neighbor.
+			dst.sin_family = AF_INET;
+			dst.sin_port = htons(AM_PORT);
+
+			sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));			
+		}
+	}
+	//sp_search_state = HAVE_BEEN_ASKED;
+	free(header);
+}
+
+void kill_switch()
+{
+	//This function occurs when the SP candidate decides to become the SP Node. This function will command the other
+	//nodes in the network to reboot so that they may acquire proxy certificates from the new SP.
+	foundSPAddr = 0;
+	foundSPID = 0;
+	neighbor_nudge(REBOOT);
+
+	//Now that each neighbor has been notified of the change, now we need to convert the candidate into an SP
+	my_role = SP;
+	pthread_create(&reboot_thread, NULL, am_reboot, NULL);
+
+}
+
+void presidential_candidacy()
+{
+	printf("In order to prevent multiple SPs in the system, the prime SP candidate in the network will be decided.\n");
+	//First, begin the search by sending out requests to neighbor nodes.
+	foundSPAddr = localNodeTimestamp; //Overloads foundSPAddr to hold the local time-stamp to fit into the AM Packet, and since the data types match.
+	neighbor_nudge(SP_CANDIDATE_SEARCH); //Update: In current form, you CANNOT use neighbor_nudge_forward since presidential_candidacy is NOT directly triggered by a received packet.
+}
+
+int presidential_debate(long localNodeTime, long senderNodeTime)
+{
+	//If true, the sender is a better candidate for SP/
+	if (senderNodeTime <= localNodeTime)
+	{
+		return 0;
+	}
+	//If the local timestamp is older than the sender timestamp... then the local node is a better candidate than the sender.
+	else
+	{
+		return 1;
+	}
+	
+}
+
+void sp_reply_start()
+{
+	//foundSPID
+	//foundSPAddress
+	//numNodesOver
+
+	numNodesOver = 0;
+	neighbor_nudge_sp_reply(SP_FOUND_REPLY, 0); //Meant for all neighbors
+}
+
+/*General Function to return SP Reply to nodes in the network. Triggers when SPSearch = 0 */
+void neighbor_nudge_sp_reply(am_type what_purpose, uint16_t senderID)
+{
+	am_packet *header;
+
+	header = (am_packet *) malloc(sizeof(am_packet)); //Malloc call. Gives memory to create am_packet.
+	header->id = my_id;
+	header->type = what_purpose; //This type will tell nodes to keep spreading the word that an SP was found!
+	header->node_role = my_role;
+	header->found_sp_id = foundSPID;
+	header->found_sp_addr = foundSPAddr;
+	header->num_nodes_over = numNodesOver;
+
+	sockaddr_in dst;
+	for (int neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
+	{
+		if (neigh_list[neighIter]->id == senderID)
+		{
+			printf("NNForward does not send a reply back to the sender!\n");
+			continue;
+		}
+		else
+		{
+			dst.sin_addr.s_addr = neigh_list[neighIter]->addr; //Pulls the IP Address of the neighbor.
+			dst.sin_family = AF_INET;
+			dst.sin_port = htons(AM_PORT);
+
+			sendto(am_send_socket, (void *)header, sizeof(am_packet), 0, (struct sockaddr *)&dst, sizeof(sockaddr_in));			
+		}
+	}
+
+	free(header);
+}
+
+/* Scour neighbor lists and return if an SP exists. Either return "YES, there is one", "NO, but I have neighbors to ask" or "NO, and I have no more neighbors to ask." */
+int neighbor_sp_scour(int senderID)
+{
+	if (sp_search_status == HAVE_BEEN_ASKED)
+	{
+		//This will notify the caller that this node has already been searched.
+		//This prevents double searches and double sends from multiple nodes.
+		return -1;
+	}
+	//Now, begin the searching process
+	sp_search_status = HAVE_BEEN_ASKED; //To ensure this process only happens once per node.
+	int neighIter = 0;
+	for (neighIter = 0; neighIter < num_trusted_neigh; neighIter++)
+	{
+		//If an SP is found in the node's neighbor list, then the search process is complete.
+		if (neigh_list[neighIter]->node_role == SP)
+		{
+			foundSPID = neigh_list[neighIter]->id;
+			foundSPAddr = neigh_list[neighIter]->addr;
+			return 0;
+		}
+	}
+	
+	//Code inside will run if no SP node was found in the neighbor list
+	//If my neighbor list only contains the sender node...
+	if (num_trusted_neigh == 1 && neigh_list[num_trusted_neigh-1]->id == senderID)
+	{
+		return 1;
+	}
+	//If I have other nodes I can send to that are not the neighbor...
+	else
+	{
+		return 2;
+	}
 }
 
 
@@ -652,7 +1192,7 @@ void al_add(uint32_t addr, uint16_t id, role_type role, unsigned char *subject_n
 	inet_ntop( AF_INET, &(authenticated_list[num_auth_nodes]->addr), (char *)&addr_char, sizeof (addr_char) );
 
 	printf("IP ADDRESS   : %s\n", addr_char);
-	if(authenticated_list[num_auth_nodes]->role == 3) {
+	if(authenticated_list[num_auth_nodes]->role == 4) {
 		printf("ROLE         : Service Proxy Node\n");
 	} else {
 		printf("ROLE         : Authenticated Node\n");
@@ -670,17 +1210,60 @@ void al_add(uint32_t addr, uint16_t id, role_type role, unsigned char *subject_n
 
 }
 
+void received_candidates_add(uint32_t time, uint16_t id)
+{
+	//num_candidate_tries counts how many entries in this list.
+
+	received_candidates[num_candidate_tries] = malloc(sizeof(candidate_node));
+	received_candidates[num_candidate_tries]->time = time;
+	received_candidates[num_candidate_tries]->id = id;
+
+}
+
+int received_candidates_remove(int pos)
+{
+	//First, check whether this node exists at all...
+	if (received_candidates[pos] == NULL)
+	{
+		printf("Node does not exist in NL, cannot remove!\n");
+		return 0;
+	}
+
+	//Free from memory
+	free(received_candidates[pos]);
+
+	//Rearrange received_candidates list to avoid open spots.
+	int i;
+	for (i = pos + 1; i < num_candidate_tries; i++)
+	{
+		received_candidates[i-1] = received_candidates[i];
+	}
+	//Reflect that one candidate has been removed.
+	num_candidate_tries--;
+
+	return 1;
+}
+
+void purge_received_candidates_list()
+{
+	//Destroys the whole received candidates list for the next time it is needed.
+	while (num_candidate_tries != 0)
+	{
+		received_candidates_remove(num_candidate_tries-1);
+	}
+}
+
 /* Add node to trusted neighbor list */ //MAC contains the keystream data.
-void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value) {
+void neigh_list_add(uint32_t addr, uint16_t id, role_type receivedRole, unsigned char *mac_value) {
 
 	int i;
 	for(i=0; i<num_trusted_neigh; i++) {
 		if(id == neigh_list[i]->id) {
 
 			if(addr == neigh_list[i]->addr) {
-
+				
 				if(neigh_list[i]->mac != NULL)
-					free(neigh_list[i]->mac);
+						free(neigh_list[i]->mac);
 
 				neigh_list[i]->mac = mac_value;
 				neigh_list[i]->window = 0;
@@ -689,6 +1272,8 @@ void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value) {
 				neigh_list[i]->num_keystream_fails = 0;
 
 				printf("Added new keystream to node already in neighbor list\n");
+				
+				
 
 			} else {
 
@@ -713,9 +1298,34 @@ void neigh_list_add(uint32_t addr, uint16_t id, unsigned char *mac_value) {
 		neigh_list[num_trusted_neigh]->last_seq_num = 0;
 		neigh_list[num_trusted_neigh]->last_rcvd_time = time (NULL);
 		neigh_list[num_trusted_neigh]->num_keystream_fails = 0;
+		neigh_list[num_trusted_neigh]->node_role = receivedRole;
+		//Now, add the node_role
+
+		//It may be better to assign node_role by pulling this role from the AL.
+		//Since the neighbor list is a sublist of the authenticated list, this should NEVER fail.
+		/*for (int authIter = 0; authIter < MAX_AUTH_NODES; authIter++)
+		{
+			if (authenticated_list[authIter]->id == id)
+			{
+				neigh_list[num_trusted_neigh]->node_role = authenticated_list[authIter]->role;
+				//We may need to go back and change the type for role to <<uint8_t>>
+			}
+		} */
+
+		/* //If, for some reason, the neighbor node is not in the Authenticated List. This SHOULDN'T happen.
+		if (authIter == MAX_AUTH_NODES)
+		{
+			neigh_list[num_trusted_neigh]->node_role = receivedRole;
+		} */
+
 		num_trusted_neigh++;
 
 		printf("Added new node to neighbor list\n");
+		
+		//Print the details about the new node added to the neighbor list.
+		//This will print the ID and the Role Type of the new node discovered.
+		printf("ID: %u\n", (unsigned int)neigh_list[num_trusted_neigh-1]->id);
+		printf("Role Type: %u\n", (unsigned int)neigh_list[num_trusted_neigh-1]->node_role);
 
 	}
 
@@ -769,16 +1379,11 @@ int openssl_cert_create_pc0(EVP_PKEY **pkey, unsigned char **subject_name) {
 
 	openssl_cert_selfsign(&pc0, pkey, subject_name); //Self Signs PC0
 
-//	RSA_print_fp(stdout,pkey->pkey.rsa,0);
-//	EC_KEY_print_fp(stdout, pkey->pkey.ec_key, 0);
-//	X509_print_fp(stdout,pc0);
-
-//	PEM_write_PrivateKey(stdout,pkey,NULL,NULL,0,NULL, NULL);
-//	PEM_write_X509(stdout,pc0);
-
 	/* Write X509 PC0 to a file */
+	errno = 0;
 	if(!(fp = fopen(MY_CERT, "w")))
 		fprintf(stderr, "Error opening file %s for writing!\n",MY_CERT);
+	printf("Error %d \n", errno);
 	if(PEM_write_X509(fp, pc0) != 1)
 		fprintf(stderr, "Error while writing request to file %s", MY_CERT);
 	fclose(fp);
@@ -987,6 +1592,7 @@ int openssl_cert_read(in_addr addr, unsigned char **s, EVP_PKEY **p) {
 
 
 
+/*This may cause issues because we changed the size of am_packet*/
 /* Send PC Handshake Invite */
 void auth_invite_send(sockaddr_in *sin_dest) {
 
@@ -1000,6 +1606,10 @@ void auth_invite_send(sockaddr_in *sin_dest) {
 	header = (am_packet *) malloc(sizeof(am_packet));
 	header->id = my_id;
 	header->type = AUTH_INVITE;
+	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = 0;
+	header->num_nodes_over = 0;
 
 	buf = malloc(MAXBUFLEN);
 	memset(buf, 0, sizeof(buf));
@@ -1022,6 +1632,7 @@ void auth_invite_send(sockaddr_in *sin_dest) {
 
 }
 
+/* Leaving node_role in place right now. We can perhaps take it out later. */
 /* Send PC Request */
 void auth_request_send(sockaddr_in *sin_dest) {
 
@@ -1034,6 +1645,10 @@ void auth_request_send(sockaddr_in *sin_dest) {
 	header = (am_packet *) malloc(sizeof(am_packet));
 	header->id = my_id;
 	header->type = AUTH_REQ;
+	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = 0;
+	header->num_nodes_over = 0;
 
 	buf = malloc(MAXBUFLEN);
 	memset(buf, 0, sizeof(buf));
@@ -1067,6 +1682,11 @@ void auth_issue_send(sockaddr_in *sin_dest) {
 	am_header = (am_packet *) malloc(sizeof(am_packet));
 	am_header->id = my_id;
 	am_header->type = AUTH_ISSUE;
+	am_header->node_role = my_role; //This would send to the recipient the role of the source node. This might break things.
+	am_header->found_sp_id = 0;
+	am_header->found_sp_addr = 0;
+	am_header->num_nodes_over = 0;
+
 
 	buf = malloc(MAXBUFLEN);
 	memset(buf, 0, sizeof(buf));
@@ -1134,6 +1754,10 @@ void neigh_pc_send(sockaddr_in *sin_dest) {
 	am_header = (am_packet *) malloc(sizeof(am_packet));
 	am_header->id = my_id;
 	am_header->type = NEIGH_PC;
+	am_header->node_role = my_role;
+	am_header->found_sp_id = 0;
+	am_header->found_sp_addr = 0;
+	am_header->num_nodes_over = 0;
 
 	buf = malloc(MAXBUFLEN);
 	memset(buf, 0, sizeof(buf));
@@ -1221,7 +1845,14 @@ char *all_sign_send(EVP_PKEY *pkey, EVP_CIPHER_CTX *master, int *key_count) {
 	header = (am_packet *) malloc(sizeof(am_packet));
 	header->id = my_id;
 	header->type = SIGNATURE; //This specifies the type of data being sent. This goes into the header.
+	header->node_role = my_role;
+	header->found_sp_id = 0;
+	header->found_sp_addr = 0;
+	header->num_nodes_over = 0;
 
+
+	//Adding the new header entries may break something since we're increasing the size of the packet.
+	//The existing code should already scale for the increased size though.
 	auth_header = malloc(sizeof(routing_auth_packet));
 	auth_header->iv_len = strlen(b64_iv);
 	auth_header->rand_len = strlen(b64_rand);
@@ -1257,192 +1888,6 @@ char *all_sign_send(EVP_PKEY *pkey, EVP_CIPHER_CTX *master, int *key_count) {
 			if(neigh_list[i]->id == authenticated_list[j]->id) {
 
 				/* NEW ECC */
-
-//				EC_KEY *ephemeral = NULL, *recip_pubkey = NULL;
-//				const EC_GROUP *group = NULL;
-//				size_t envelope_length, block_length, key_length;
-//				unsigned char envelope_key[SHA256_DIGEST_LENGTH] = { 0 };
-//				unsigned char iv[AES_IV_SIZE] = { 0 };
-//				unsigned char block[EVP_MAX_BLOCK_LENGTH] = { 0 };
-//
-//				if ((key_length = EVP_CIPHER_key_length(ECDH_CIPHER)) * 2 > SHA256_DIGEST_LENGTH) {
-//					printf("The key derivation method will not produce enough envelope key material for the chosen ciphers. {envelope = %i / required = %zu}", SHA256_DIGEST_LENGTH / 8, (key_length * 2) / 8);
-//					return NULL;
-//				}
-//
-//				// Create the ephemeral key used specifically for this block of data.
-//				if (!(ephemeral = EC_KEY_new())) {
-//					printf("EC_KEY_new failed. {error = %s}\n", ERR_error_string(ERR_get_error(), NULL));
-//					return NULL;
-//				}
-//
-//				//Extract Public key from AL and copy group settings
-//				recip_pubkey = EVP_PKEY_get1_EC_KEY(authenticated_list[j]->pub_key);
-//				group = EC_KEY_get0_group(recip_pubkey);
-//
-//
-//				if (EC_KEY_set_group(ephemeral, group) != 1) {
-//					printf("EC_KEY_set_group failed. {error = %s}\n", ERR_error_string(ERR_get_error(), NULL));
-//					EC_GROUP_free(group);
-//					EC_KEY_free(ephemeral);
-//					return NULL;
-//				}
-//
-//				EC_GROUP_free(group);
-//
-//				if (EC_KEY_generate_key(ephemeral) != 1) {
-//					printf("EC_KEY_generate_key failed. {error = %s}\n", ERR_error_string(ERR_get_error(), NULL));
-//					EC_KEY_free(ephemeral);
-//					return NULL;
-//				}
-//
-//
-//				// Use the intersection of the provided keys to generate the envelope data used by the ciphers below. The ecies_key_derivation() function uses
-//				// SHA 256 to ensure we have a sufficient amount of envelope key material and that the material created is sufficiently secure.
-//				if (ECDH_compute_key(envelope_key, SHA256_DIGEST_LENGTH, EC_KEY_get0_public_key(recip_pubkey), ephemeral, KDF1_SHA256) != SHA256_DIGEST_LENGTH) {
-//					printf("An error occurred while trying to compute the envelope key. {error = %s}\n", ERR_error_string(ERR_get_error(), NULL));
-//					EC_KEY_free(ephemeral);
-//					EC_KEY_free(recip_pubkey);
-//					return NULL;
-//				}
-//
-//				// Determine the envelope and block lengths so we can allocate a buffer for the result.
-//				if ((block_length = EVP_CIPHER_block_size(ECDH_CIPHER)) == 0 || block_length > EVP_MAX_BLOCK_LENGTH ||
-//						(envelope_length = EC_POINT_point2oct(EC_KEY_get0_group(ephemeral), EC_KEY_get0_public_key(ephemeral), POINT_CONVERSION_COMPRESSED, NULL, 0, NULL)) == 0) {
-//
-//					printf("Invalid block or envelope length. {block = %zu / envelope = %zu}\n", block_length, envelope_length);
-//					EC_KEY_free(ephemeral);
-//					EC_KEY_free(recip_pubkey);
-//					return NULL;
-//				}
-//
-//
-//				secure_t *cryptex;
-//
-//				// We use a conditional to pad the length if the input buffer is not evenly divisible by the block size.
-//				if (!(cryptex = secure_alloc(envelope_length, EVP_MD_size(ECDH_HASHER), AES_KEY_SIZE, AES_KEY_SIZE + (AES_KEY_SIZE % block_length ? (block_length - (AES_KEY_SIZE % block_length)) : 0)))) {
-//					printf("Unable to allocate a secure_t buffer to hold the encrypted result.\n");
-//					EC_KEY_free(ephemeral);
-//					EC_KEY_free(recip_pubkey);
-//					return NULL;
-//				}
-//
-//
-//				// Store the public key portion of the ephemeral key.
-//				if (EC_POINT_point2oct(EC_KEY_get0_group(ephemeral), EC_KEY_get0_public_key(ephemeral), POINT_CONVERSION_COMPRESSED, (char *)cryptex+sizeof(secure_head_t), envelope_length, NULL) != envelope_length) {
-//					printf("An error occurred while trying to record the public portion of the envelope key. {error = %s}\n", ERR_error_string(ERR_get_error(), NULL));
-//					EC_KEY_free(ephemeral);
-//					EC_KEY_free(recip_pubkey);
-//					free(cryptex);
-//					return NULL;
-//				}
-//
-//				// The envelope key has been stored so we no longer need to keep the keys around.
-//				EC_KEY_free(ephemeral);
-//				EC_KEY_free(recip_pubkey);
-//
-//				// For now we use an empty initialization vector.
-//				memset(iv, 0, AES_IV_SIZE);
-////				RAND_pseudo_bytes(&iv, AES_IV_SIZE);
-//
-//				// Setup the cipher context, the body length, and store a pointer to the body buffer location.
-//				EVP_CIPHER_CTX cipher;
-//				void *body;
-//				int body_length;
-//
-//				EVP_CIPHER_CTX_init(&cipher);
-//				body = secure_body_data(cryptex);
-//				body_length = ((secure_head_t *)cryptex)->length.body;
-//
-//
-//				// Initialize the cipher with the envelope key.
-//				if (EVP_EncryptInit_ex(&cipher, ECDH_CIPHER, NULL, envelope_key, iv) != 1 ||
-//						EVP_CIPHER_CTX_set_padding(&cipher, 0) != 1 ||
-//						EVP_EncryptUpdate(&cipher, body, &body_length, current_key,
-//								AES_KEY_SIZE - (AES_KEY_SIZE % block_length)) != 1)
-//				{
-//
-//					printf("An error occurred while trying to secure the data using the chosen symmetric cipher. {error = %s}\n", ERR_error_string(ERR_get_error(), NULL));
-//					EVP_CIPHER_CTX_cleanup(&cipher);
-//					free(cryptex);
-//					return NULL;
-//
-//				}
-//
-//
-//				// Advance the pointer, then use pointer arithmetic to calculate how much of the body buffer has been used. The complex logic is needed so that we get
-//				// the correct status regardless of whether there was a partial data block.
-//				body += body_length;
-//				if ((body_length = ((secure_head_t *)cryptex)->length.body - (body - secure_body_data(cryptex))) < 0) {
-//					printf("The symmetric cipher overflowed!\n");
-//					EVP_CIPHER_CTX_cleanup(&cipher);
-//					free(cryptex);
-//					return NULL;
-//				}
-//
-//
-//				if (EVP_EncryptFinal_ex(&cipher, body, &body_length) != 1) {
-//					printf("Unable to secure the data using the chosen symmetric cipher. {error = %s}\n", ERR_error_string(ERR_get_error(), NULL));
-//					EVP_CIPHER_CTX_cleanup(&cipher);
-//					free(cryptex);
-//					return NULL;
-//				}
-//
-//				EVP_CIPHER_CTX_cleanup(&cipher);
-//
-//				// Generate an authenticated hash which can be used to validate the data during decryption.
-//				HMAC_CTX hmac;
-//				unsigned int mac_length;	mac_value = ;
-//				HMAC_CTX_init(&hmac);
-//				mac_length = ((secure_head_t *)cryptex)->length.mac;
-//
-//				// At the moment we are generating the hash using encrypted data. At some point we may want to validate the original text instead.
-//				HMAC_Init_ex(&hmac, envelope_key + key_length, key_length, ECDH_HASHER, NULL);
-//				HMAC_Update(&hmac, current_key, AES_KEY_SIZE);
-//				HMAC_Final(&hmac, secure_mac_data(cryptex), &mac_length);
-////				{
-////
-////					printf("Unable to generate a data authentication code. {error = %s}\n", ERR_error_string(ERR_get_error(), NULL));
-////					HMAC_CTX_cleanup(&hmac);
-////					free(cryptex);
-////					return NULL;
-////				}
-//
-//				HMAC_CTX_cleanup(&hmac);
-//
-//				tool_dump_memory((unsigned char *)secure_body_data(cryptex), body_length);
-//
-//				exit(1);
-
-
-
-				/* OLD ECC */
-
-//				recip_pubkey = EVP_PKEY_get1_EC_KEY(authenticated_list[j]->pub_key);
-//				group = EC_KEY_get0_group(recip_pubkey);
-//
-//				ephemeral_key = EC_KEY_new();
-//				EC_KEY_set_group(ephemeral_key, group);
-//
-//				EC_KEY_generate_key(ephemeral_key);
-//
-//				// With this 256 bit long buffer, we have a 128bit (16 Byte) AES key and IV to encrypt the key being sent...
-//				ECDH_compute_key(key_iv_buf, sizeof key_iv_buf, EC_KEY_get0_public_key(recip_pubkey), ephemeral_key, KDF1_SHA256);
-//				unsigned char *key, *iv;
-//				key = malloc(AES_KEY_SIZE);
-//				iv = malloc(AES_IV_SIZE);
-//				memcpy(key, key_iv_buf, AES_KEY_SIZE);
-//				memcpy(iv, key_iv_buf+AES_KEY_SIZE, AES_IV_SIZE);
-//
-//				EVP_CIPHER_CTX aes_ctx;
-//				EVP_EncryptInit(&aes_ctx, EVP_aes_128_ecb(), key, iv);
-//				unsigned char *encrypted_key;
-//				int encrypted_key_len = AES_KEY_SIZE;
-//				encrypted_key = openssl_aes_encrypt(&aes_ctx, current_key, &encrypted_key_len);
-//
-//				free(key);
-//				free(iv);
-//
 
 				RSA *neig_rsa = authenticated_list[j]->pub_key->pkey.rsa; //An RSA Key resides here. This is unique for each neighbor node.
 
@@ -1596,6 +2041,10 @@ void neigh_sign_req_send(uint32_t addr) {
 	am_header = (am_packet *) malloc(sizeof(am_packet));
 	am_header->id = my_id;
 	am_header->type = NEIGH_SIG_REQ;
+	am_header->node_role = my_role;
+	am_header->found_sp_id = 0;
+	am_header->found_sp_addr = 0;
+	am_header->num_nodes_over = 0;
 
 	sockaddr_in dst;
 	dst.sin_addr.s_addr = addr;
@@ -1610,7 +2059,7 @@ void neigh_sign_req_send(uint32_t addr) {
 
 
 /* Extract AM Data Type From Received AM Packet */
-am_type am_header_extract(char *buf, char **ptr, int *id) {
+am_type am_header_extract(char *buf, char **ptr, int *id, role_type *role_of_rcvd_node, uint16_t *rcvd_sp_id, uint32_t *rcvd_sp_addr, uint16_t *rcvd_num_nodes_over) {
 
 	am_packet *header;
 	header = (am_packet *)buf;
@@ -1620,6 +2069,10 @@ am_type am_header_extract(char *buf, char **ptr, int *id) {
 
 	*id = header->id;
 
+	*role_of_rcvd_node = header->node_role; //This returns back the received node role. This is new from (7/9)
+	*rcvd_sp_id = header->found_sp_id; //Returns back found SP Node ID (if applicable)
+	*rcvd_sp_addr = header->found_sp_addr; //Returns back found SP Node IP Address (if applicable)
+	*rcvd_num_nodes_over = header->num_nodes_over; //Returns the number of nodes over the SP Node is (if applicable)
 	return header->type; //This returns the header, which is used above in a SWITCH to determine how to handle the incoming data.
 
 }
@@ -1642,7 +2095,7 @@ int auth_invite_recv(char *ptr) {
 }
 
 /* Receive Routing Auth Packet */
-int neigh_sign_recv(EVP_PKEY *pkey, uint32_t addr, uint16_t id, char *ptr, char *auth_packet) {
+int neigh_sign_recv(EVP_PKEY *pkey, uint32_t addr, uint16_t id, role_type receivedRole, char *ptr, char *auth_packet) {
 
 	char *addr_char = malloc(16);
 	inet_ntop( AF_INET, &addr, addr_char, 16 );
@@ -1794,7 +2247,7 @@ int neigh_sign_recv(EVP_PKEY *pkey, uint32_t addr, uint16_t id, char *ptr, char 
 		}
 	}
 
-	neigh_list_add(addr, id, mac_value);
+	neigh_list_add(addr, id, receivedRole, mac_value);
 
 
 
@@ -2443,7 +2896,7 @@ int openssl_cert_mkcert(EVP_PKEY **pkey, X509_REQ *req,X509 **pc1p, X509 **pc0p,
 	ASN1_INTEGER_set(X509_get_serialNumber(cert), rand()%INT32_MAX);
 
 	/* Set issuer */
-	if(X509_set_issuer_name(cert, issuer_name) != 1)
+	if(X509_set_issuer_name(cert, issuer_name) != 1) //issuer_name = X509_get_subject_name(*pc0p)
 		fprintf(stderr,"Error setting the issuer name");
 
 	/* Set subject name from issuer name */
@@ -2511,7 +2964,7 @@ int openssl_cert_mkcert(EVP_PKEY **pkey, X509_REQ *req,X509 **pc1p, X509 **pc0p,
 		return 1;
 	}
 
-	if(!(X509_sign(cert, my_pkey, digest)))
+	if(!(X509_sign(cert, my_pkey, digest))) //Sign the PC1 with the PC0's private key and digest.
 		fprintf(stderr,"Error signing cert");
 
 

@@ -1,0 +1,133 @@
+We need to implement a way that can
+figure out if a Master Node is missing.
+
+LINE 594, we can perhaps learn from
+nodes that are being purged if the
+MASTER node is being purged.
+
+role_type is defined in am.h, and
+is defined as:
+
+typedef enum role_type_en{
+	UNAUTHENTICATED,
+	AUTHENTICATED,
+	RESTRICTED,
+	MASTER,
+	SP
+} role_type;
+
+A possible solution for this would
+be the tracking of the ROLES of the
+connected nodes.
+
+How could these roles then be sent
+through the network? Is it possible
+to use auth_request_send and
+auth_issue_send to send roles between
+nodes?
+
+I would need to send it through an
+AM packet. It would be sent alongside
+the id and type of the packet.
+
+TO-DO:
+-Need to change the function call parameters
+for neigh_list_add to reflect that role_type
+has been added.
+-Develop a reboot function that repurposes the node from AUTHENTICATED to SP if needed.
+-Implement new states that reflect that
+a node MIGHT become an SP. This is important
+so we don't have multiple nodes become an SP.
+
+DONE:
+-neigh_list_add properly adds node_role
+to the list.
+-Nodes can identify when an SP is not an immediate neighbor.
+
+WHAT DOES IT MEAN IF A NODE DOESN'T HAVE AN SP NEIGHBOR?
+-It means that in that node's immediate network, nodes cannot be authenticated!
+-However, nodes that are neighbors might be able to be authenticated as host nodes and neighbor nodes
+don't particularly share all the same neighbors.
+
+HOW COULD THiS BE SOLVED?
+-We reboot the AM and transition from an Authenticated Node to an SP.
+-We rely on the probability that an unauthenticated node will eventually land on an SP.
+
+HOW DO WE NOTIFY NODES THAT WE PERHAPS MIGHT CHANGE STATES?
+-We broadcast to all neighbors of this potential change.
+-This could be done using a new component in the neighbor list
+-And a function that forces a new message to be sent to all neighbors.
+
+HOW DO WE FIND THE CLOSEST SP IN THE NETWORK TO A OUTER WORLD NODE?
+-Flood the network and return back to the requestor with that info.
+
+FROM THE DOCUMENTATION:
+-It is discussed that support for multiple SPs are not implemented,
+but the following solutions are suggested for their implemenation.
+
+-Whenever full merging of two secure and managed MANETs happen as described above two or _more_
+SPs will end up in the same network (more than likely more as the network scales up). This
+introduces a challenge to assess as networks for flat- and have no inherent heirarchy.
+
+-The best way for networks to merge is to assume that SPs are equally important, so that nodes
+authenticated by one SP and others authenticated by another are allowed to coexist. This is possible
+by making sure all nodes know the public keys of all SPs in the network.
+
+-It is likely that not all nodes in the network will ever become a direct neighbor and therefore
+will not receive the other SP's PC0s, but they will probably meet and should connect with nodes that
+were signed by that SP's PC0.
+	-A way around this problem is to have each SP to once in a while broadcast a digitally signed list to all its children nodes
+	containing the identities and public keys for all other trusted SPs in the network.
+	-THE REAL CHALLENGE WILL BE HOW TO GET EVERY SP TO KNOW EACH OTHER'S NAMES AND PUB KEYS 
+	-But, since this list is sent by an SP, it can be inherently trusted by its children.
+
+-If an authenticated node wants to become an SP, and wants to retrieve public key of SPs that
+originally authored it,
+	IT TAKES THAT KEY FROM THE AUTH LIST.
+
+
+
+FLOW OF ACTION
+-In a routine scan, a node may remove an SP from its neighbor list, meaning that an SP is not in its immediately available network.
+	-This implies the possibility that the node's region of the network is without an SP, which means that no new nodes are able to be added to the network.
+-The node that detects this goes into NO_SP mode. This means that the node is on alert to find an SP soon.
+	-During this time, the node flags to its neighbors that it is looking for an SP.
+	-This state prevents other nodes from engaging in this state as well. Only one neighbor of the bunch can look for an SP at a time.
+-If, after a certain time period, the node cannot find an SP, it will take the PUBLIC KEY of the original SP, store it, and then restart its operations as an SP
+	-node. This process will create a new PC0 for nodes to connect to, but will also hold the other PUBLIC KEY so that nodes that were authenticated with the other SP
+	are still able to communicate with this node.
+
+SOMETHING TO CONSIDER:
+-How many SPs do we want to deal with? If we only want to work with one SP at a time, then we could send out a kill switch
+to all the nodes in the network to purge their certificates and "start over"
+	-OR, we keep the public key of the old SP, and just run one SP at a time but still keep the public keys of the old ones.
+	-This allows for every node on an authenticated list to keep their spot in the network.
+
+-Do we want to keep multiple SPs in a network?
+	-At that point, it may be required to keep an updated SP List on all nodes in the network
+	-On the off-chance that they encounter a node from other SP, they can still connect and interact.
+
+
+NOTES from 7/11:
+-ISSUED_CERT is the PC1 that gets sent to an unauthenticated node.
+-MY_CERT (when on an SP) is the PC0.
+-my_pkey ist he private key of the SP
+-cert is the temp name of the PC1 being created.
+
+-req_pkey is the Request's Public Key
+-Every node has a unique public key.
+
+TO DECIDE BETWEEN WHICH NODE WILL BECOME THE SP IF NEEDED:
+-Nodes will log at what time (in Epoch time) they flagged an issue, and send this as a packet to
+neighbors.
+-If the sent packet has an earlier timestamp, the recipient node yields and stops ops.
+-Otherwise, it still remains the candidate for becoming an SP.
+
+NOTES from 7/14:
+-Need to implement way in main loop to confirm that they are the SP candidate.
+-Also, will need to begin code for how to reboot node.
+-am.h will need to be updated to reflect all the new functions added.
+
+NOTES from 7/15:
+-Main loop (after reading input data) starts on Line 710
+-Kill Switch is implemented. Need to walk through written code and make sure it logically makes sense.
